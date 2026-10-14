@@ -1,0 +1,9 @@
+node_modules
+.venv
+.next
+_work
+*.blend1
+.DS_Store
+# portraits + generated base64 bundle are media, kept local only
+source/
+images-data.js

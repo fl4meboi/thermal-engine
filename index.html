@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>THERMAL // Code-Art Portrait &amp; Live Webcam Stylizer</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Top Bar -->
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-logo"></div>
+      <div class="brand-title">
+        THERMAL STUDIO
+        <span class="badge">Code-Art Engine</span>
+      </div>
+    </div>
+
+    <!-- Top-Level Mode Switcher: 1. Still Image Mode | 2. Real-Time Webcam Mode -->
+    <div class="source-mode-switcher">
+      <button id="sourceStillBtn" class="source-tab active" data-source="still">
+        <span>🖼</span> 1. Still Image Mode
+      </button>
+      <button id="sourceWebcamBtn" class="source-tab" data-source="webcam">
+        <span class="live-dot webcam-dot"></span> 2. Real-Time Webcam Mode
+      </button>
+    </div>
+
+    <div class="header-actions">
+      <button id="holdOriginalBtn" class="btn" title="Hold to compare unstylized input">
+        <span>👁</span> Hold for Original
+      </button>
+
+      <!-- Still Image Mode Actions -->
+      <div id="stillActionsGroup" class="action-group">
+        <button id="toggleGridBtn" class="btn" title="Compare all 5 portraits side by side">
+          <span>⊞</span> View All 5
+        </button>
+        <label class="btn" for="uploadInput" title="Load additional images">
+          <span>＋</span> Add Image
+          <input id="uploadInput" type="file" accept="image/*" multiple style="display:none;" />
+        </label>
+        <button id="exportCurrentBtn" class="btn btn-primary">
+          <span>↓</span> Export PNG
+        </button>
+        <button id="exportAllBtn" class="btn btn-spectral">
+          <span>⇊</span> Batch Export All 5
+        </button>
+      </div>
+
+      <!-- Real-Time Webcam Mode Actions -->
+      <div id="webcamActionsGroup" class="action-group" style="display:none;">
+        <button id="freezeWebcamBtn" class="btn" title="Freeze / Resume live webcam feed">
+          <span>⏸</span> Freeze Frame
+        </button>
+        <button id="snapshotWebcamBtn" class="btn btn-primary" title="Save current webcam frame as PNG">
+          <span>📸</span> Snapshot PNG
+        </button>
+        <button id="recordWebcamBtn" class="btn btn-danger" title="Record real-time thermal video clip">
+          <span>●</span> Record Video
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Workspace -->
+  <div class="workspace">
+    <!-- Left/Center Viewport -->
+    <div class="viewport-container">
+      <!-- 4 Aesthetic Heatmap Options (Shared across both Still & Webcam modes) -->
+      <div class="mode-tabs-bar">
+        <div class="mode-card active" data-mode="thermal">
+          <div class="mode-number">Option 01 • Default</div>
+          <div class="mode-name">Smooth Thermal / Infrared</div>
+          <div class="mode-desc">Spectral false-color field with thermal diffusion, bloom &amp; sensor grain</div>
+        </div>
+        <div class="mode-card" data-mode="topo">
+          <div class="mode-number">Option 02</div>
+          <div class="mode-name">Topographic / Contour Heatmap</div>
+          <div class="mode-desc">Thermal elevation field with procedural iso-luminance contour lines</div>
+        </div>
+        <div class="mode-card" data-mode="generative">
+          <div class="mode-number">Option 03</div>
+          <div class="mode-name">Generative Halftone / Grid / ASCII</div>
+          <div class="mode-desc">Redrawn from code with thermal dots, ASCII glyphs, or wave scanlines</div>
+        </div>
+        <div class="mode-card" data-mode="layered">
+          <div class="mode-number">Option 04</div>
+          <div class="mode-name">Layered Hybrid + Thermal HUD</div>
+          <div class="mode-desc">Spectral thermal base + glowing contours + scanlines + telemetry HUD</div>
+        </div>
+      </div>
+
+      <!-- Canvas Stage -->
+      <div class="canvas-stage">
+        <div id="singleViewWrapper" class="single-canvas-wrapper">
+          <canvas id="mainCanvas" width="928" height="1152"></canvas>
+
+          <!-- Webcam Permission / Error Overlay -->
+          <div id="webcamPromptOverlay" class="webcam-overlay-prompt">
+            <h3 id="webcamPromptTitle">Starting Real-Time Thermal Camera...</h3>
+            <p id="webcamPromptDesc">Please allow camera access in your browser prompt to stream live webcam footage through the thermal code-art engine.</p>
+            <button id="retryWebcamBtn" class="btn btn-primary" style="display:none;">Retry Camera Access</button>
+          </div>
+        </div>
+        <div id="gridViewWrapper" class="grid-canvas-wrapper"></div>
+      </div>
+
+      <!-- Bottom Bar: Filmstrip (Still Mode) OR Webcam Telemetry Bar (Webcam Mode) -->
+      <div class="filmstrip-bar">
+        <!-- Still Mode Filmstrip -->
+        <div id="stillFilmstripContainer" style="display:flex; align-items:center; justify-content:space-between; width:100%; gap:12px;">
+          <div id="thumbnailsList" class="thumbnails-list"></div>
+          <div style="font-size:11px; color:var(--text-muted); text-align:right; flex-shrink:0;">
+            <div id="resolutionLabel" style="color:var(--text-main); font-weight:600;">928 × 1152 px</div>
+            <div>Use ← / → keys to switch portraits • 1–4 for styles</div>
+          </div>
+        </div>
+
+        <!-- Webcam Mode Bar -->
+        <div id="webcamStatusBar" class="webcam-status-bar">
+          <div class="webcam-controls-inline">
+            <div class="inline-control-item">
+              <span style="color:var(--text-muted);">Camera:</span>
+              <select id="cameraDeviceSelect">
+                <option value="">Default Webcam</option>
+              </select>
+            </div>
+
+            <div class="inline-control-item">
+              <span style="color:var(--text-muted);">Processing Res:</span>
+              <select id="webcamResSelect">
+                <option value="480">Fast (640 × 480 • 60fps)</option>
+                <option value="640" selected>Balanced (854 × 640)</option>
+                <option value="720">HD (960 × 720)</option>
+              </select>
+            </div>
+
+            <label class="inline-control-item" style="cursor:pointer;">
+              <input type="checkbox" id="mirrorWebcam" checked style="accent-color:var(--accent-cyan);" />
+              <span>Mirror Video</span>
+            </label>
+          </div>
+
+          <div style="display:flex; align-items:center; gap:14px;">
+            <span id="fpsCounter" class="fps-pill">-- FPS</span>
+            <div style="font-size:11px; color:var(--text-muted); text-align:right;">
+              <div id="webcamResLabel" style="color:var(--text-main); font-weight:600;">LIVE IR STREAM</div>
+              <div>All right-hand sliders apply in real time</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Controls Sidebar (Shared between Still Image Mode & Real-Time Webcam Mode) -->
+    <aside class="controls-sidebar">
+      <!-- Palette Section -->
+      <div class="control-section">
+        <div class="section-header">
+          <span class="section-title">Spectral Color Palette</span>
+          <button id="resetParamsBtn" class="btn" style="padding:2px 8px; font-size:10.5px;">Reset</button>
+        </div>
+
+        <canvas id="palettePreviewCanvas" class="palette-preview" width="300" height="20"></canvas>
+        <div class="palette-labels">
+          <span>COLD (0.0)</span>
+          <span>MID (0.5)</span>
+          <span>HOT (1.0)</span>
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>Palette Preset</span>
+          </div>
+          <select id="paletteSelect">
+            <option value="rainbow" selected>Rainbow / Spectral Thermal (Blue → Cyan → Green → Yellow → Red)</option>
+            <option value="rainbow_hot">Spectral Thermal + Hot White Core</option>
+            <option value="predator">Predator Full Spectrum (Deep Blue → Teal → Lime → Red)</option>
+            <option value="flir">Classic Infrared / FLIR Ironbow</option>
+            <option value="inferno">Inferno / Magma</option>
+            <option value="acid">Acid Cyber Thermal</option>
+          </select>
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>Hue Shift</span>
+            <span class="control-val" id="hueShiftVal">0°</span>
+          </div>
+          <input type="range" id="hueShift" min="-180" max="180" step="1" value="0" />
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>Quantize / Posterize Bands</span>
+            <span class="control-val" id="posterizeVal">Smooth</span>
+          </div>
+          <input type="range" id="posterize" min="0" max="32" step="1" value="0" />
+        </div>
+
+        <label class="checkbox-row">
+          <span>Invert Thermal Polarity (Cold ↔ Hot)</span>
+          <input type="checkbox" id="invertThermal" />
+        </label>
+      </div>
+
+      <!-- Thermal Field Calibration -->
+      <div class="control-section">
+        <div class="section-header">
+          <span class="section-title">Thermal Field &amp; Sensing</span>
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>Thermal Diffusion (Smoothing)</span>
+            <span class="control-val" id="smoothingVal">3.5 px</span>
+          </div>
+          <input type="range" id="smoothing" min="0" max="20" step="0.5" value="3.5" />
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>Contrast / Dynamic Stretch</span>
+            <span class="control-val" id="contrastVal">1.20</span>
+          </div>
+          <input type="range" id="contrast" min="0.5" max="2.5" step="0.05" value="1.20" />
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>Heat Bias (Gamma)</span>
+            <span class="control-val" id="gammaVal">0.95</span>
+          </div>
+          <input type="range" id="gamma" min="0.4" max="2.2" step="0.05" value="0.95" />
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>Exposure Offset</span>
+            <span class="control-val" id="exposureVal">0.00</span>
+          </div>
+          <input type="range" id="exposure" min="-0.4" max="0.4" step="0.02" value="0.00" />
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>Detail / Micro-Relief Boost</span>
+            <span class="control-val" id="detailBoostVal">0.35</span>
+          </div>
+          <input type="range" id="detailBoost" min="0" max="1.5" step="0.05" value="0.35" />
+        </div>
+
+        <label class="checkbox-row">
+          <span>Auto-Normalize Dynamic Range</span>
+          <input type="checkbox" id="autoNormalize" checked />
+        </label>
+      </div>
+
+      <!-- Mode-Specific Controls: Topographic (Option 2 & 4) -->
+      <div class="control-section" id="topoControlsSection">
+        <div class="section-header">
+          <span class="section-title">Topographic Contour Controls</span>
+        </div>
+
+        <div class="submode-pills" id="topoStylePills">
+          <div class="pill-btn active" data-topostyle="overlay">Thermal + Glow Lines</div>
+          <div class="pill-btn" data-topostyle="wireframe">Pure Spectral Isolines</div>
+          <div class="pill-btn" data-topostyle="plateau">Stepped Plateaus</div>
+          <div class="pill-btn" data-topostyle="ink">Thermal + Dark Ink</div>
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>Contour Elevation Bands</span>
+            <span class="control-val" id="contourCountVal">18</span>
+          </div>
+          <input type="range" id="contourCount" min="4" max="45" step="1" value="18" />
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>Contour Line Thickness</span>
+            <span class="control-val" id="contourThicknessVal">1.35</span>
+          </div>
+          <input type="range" id="contourThickness" min="0.4" max="3.5" step="0.05" value="1.35" />
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>Contour Opacity / Mix</span>
+            <span class="control-val" id="contourMixVal">0.80</span>
+          </div>
+          <input type="range" id="contourMix" min="0" max="1" step="0.05" value="0.80" />
+        </div>
+      </div>
+
+      <!-- Mode-Specific Controls: Generative Redraw (Option 3) -->
+      <div class="control-section" id="genControlsSection">
+        <div class="section-header">
+          <span class="section-title">Generative Code Redraw</span>
+        </div>
+
+        <div class="submode-pills" id="genStylePills">
+          <div class="pill-btn active" data-genstyle="halftone">Thermal Halftone Dots</div>
+          <div class="pill-btn" data-genstyle="ascii">ASCII / Code Matrix</div>
+          <div class="pill-btn" data-genstyle="scanlines">Wave Scanlines</div>
+          <div class="pill-btn" data-genstyle="led">Sensor Pixel Grid</div>
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>Grid Cell Spacing</span>
+            <span class="control-val" id="cellSizeVal">10 px</span>
+          </div>
+          <input type="range" id="cellSize" min="5" max="26" step="1" value="10" />
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>Element Scale / Amplitude</span>
+            <span class="control-val" id="genScaleVal">1.15</span>
+          </div>
+          <input type="range" id="genScale" min="0.4" max="2.2" step="0.05" value="1.15" />
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>Thermal Underlay Blend</span>
+            <span class="control-val" id="genBgMixVal">0.15</span>
+          </div>
+          <input type="range" id="genBgMix" min="0" max="0.8" step="0.05" value="0.15" />
+        </div>
+      </div>
+
+      <!-- Optics, Bloom & HUD (All Modes & Option 4) -->
+      <div class="control-section">
+        <div class="section-header">
+          <span class="section-title">Optics, Bloom &amp; Overlays</span>
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>Thermal Halation / Bloom</span>
+            <span class="control-val" id="bloomVal">0.45</span>
+          </div>
+          <input type="range" id="bloom" min="0" max="1.2" step="0.05" value="0.45" />
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>Optical Chromatic Shift</span>
+            <span class="control-val" id="chromaVal">2.0 px</span>
+          </div>
+          <input type="range" id="chroma" min="0" max="10" step="0.5" value="2.0" />
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>IR Sensor Grain</span>
+            <span class="control-val" id="grainVal">0.08</span>
+          </div>
+          <input type="range" id="grain" min="0" max="0.35" step="0.01" value="0.08" />
+        </div>
+
+        <div class="control-row">
+          <div class="control-label">
+            <span>CRT / Thermal Scanlines</span>
+            <span class="control-val" id="scanlineVal">0.15</span>
+          </div>
+          <input type="range" id="scanline" min="0" max="0.8" step="0.05" value="0.15" />
+        </div>
+
+        <label class="checkbox-row">
+          <span>Show Thermal Telemetry HUD &amp; Scale</span>
+          <input type="checkbox" id="showHud" />
+        </label>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Hidden Video Element for Webcam Feed -->
+  <video id="webcamVideo" autoplay playsinline muted style="display:none;"></video>
+
+  <div id="statusToast" class="status-toast">Exported image!</div>
+
+  <script src="images-data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
