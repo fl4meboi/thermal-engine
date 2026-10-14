@@ -962,6 +962,8 @@ function setSourceMode(newSourceMode) {
   document.getElementById("stillFilmstripContainer").style.display = newSourceMode === "still" ? "flex" : "none";
   document.getElementById("webcamStatusBar").classList.toggle("active", newSourceMode === "webcam");
 
+  updateStillEmptyState();
+
   if (newSourceMode === "webcam") {
     if (isGridView) toggleGridView(false);
     const selectedDevice = document.getElementById("cameraDeviceSelect").value;
@@ -1369,26 +1371,47 @@ function initControls() {
   });
 
   // Upload additional images
-  document.getElementById("uploadInput").addEventListener("change", (e) => {
-    const files = Array.from(e.target.files || []);
+  function handleImageFiles(files) {
     files.forEach((file) => {
+      if (!file.type.startsWith("image/")) return;
       const reader = new FileReader();
       reader.onload = (ev) => {
         const name = file.name.replace(/\.[^.]+$/, "");
+        if (state.sourceMode !== "still") {
+          setSourceMode("still");
+        }
         addImageEntry({ name, filename: file.name, src: ev.target.result }, true);
       };
       reader.readAsDataURL(file);
     });
+  }
+
+  document.getElementById("uploadInput").addEventListener("change", (e) => {
+    handleImageFiles(Array.from(e.target.files || []));
   });
+
+  // Drag-and-drop support onto the canvas stage
+  const stageEl = document.querySelector(".canvas-stage");
+  if (stageEl) {
+    stageEl.addEventListener("dragover", (e) => {
+      e.preventDefault();
+    });
+    stageEl.addEventListener("drop", (e) => {
+      e.preventDefault();
+      if (e.dataTransfer && e.dataTransfer.files) {
+        handleImageFiles(Array.from(e.dataTransfer.files));
+      }
+    });
+  }
 
   // Keyboard shortcuts
   window.addEventListener("keydown", (e) => {
     if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
-    if (e.key === "ArrowRight" && state.sourceMode === "still") {
+    if (e.key === "ArrowRight" && state.sourceMode === "still" && imagesList.length > 0) {
       activeIndex = (activeIndex + 1) % imagesList.length;
       updateThumbnailsActive();
       requestRender();
-    } else if (e.key === "ArrowLeft" && state.sourceMode === "still") {
+    } else if (e.key === "ArrowLeft" && state.sourceMode === "still" && imagesList.length > 0) {
       activeIndex = (activeIndex - 1 + imagesList.length) % imagesList.length;
       updateThumbnailsActive();
       requestRender();
