@@ -1060,9 +1060,15 @@ function stopVideoRecording() {
   }
 }
 
+function updateStillEmptyState() {
+  const empty = state.sourceMode === "still" && imagesList.length === 0;
+  document.getElementById("stillEmptyOverlay").classList.toggle("visible", empty);
+}
+
 let renderQueued = false;
 function requestRender() {
   buildLUT();
+  updateStillEmptyState();
   if (state.sourceMode === "webcam") {
     // Live loop handles rendering automatically; if frozen, trigger one frame redraw
     if (webcamFrozen && webcamActive) {
@@ -1407,6 +1413,7 @@ function addImageEntry(item, switchToNew = false) {
     cache: null
   };
   imagesList.push(entry);
+  updateStillEmptyState();
   const idx = imagesList.length - 1;
   entry.img.onload = () => {
     entry.cache = extractRawLuminance(entry.img);
@@ -1428,6 +1435,7 @@ function init() {
   if (window.PORTRAIT_IMAGES && window.PORTRAIT_IMAGES.length > 0) {
     window.PORTRAIT_IMAGES.forEach((item) => addImageEntry(item, false));
   }
+  updateStillEmptyState();
 }
 
 init();

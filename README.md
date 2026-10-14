@@ -2,7 +2,11 @@
 
 THERMAL STUDIO: a code-art engine that redraws portraits (still mode) and live webcam footage (real-time mode) as thermal / heat-map style imagery. Plain HTML, CSS and JS with no build step.
 
-## Run
+## Try it
+
+Live: https://fl4meboi.github.io/thermal-engine/ (images you add stay in your browser; nothing is uploaded).
+
+## Run locally
 
 Open `index.html` in a browser (webcam mode needs a secure context, so use `python3 -m http.server` and visit `http://localhost:8000`).
 
