@@ -25,39 +25,49 @@ body {
   background-color: var(--bg-app);
   color: var(--text-main);
   height: 100vh;
+  height: 100dvh;
+  width: 100vw;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.label-short {
+  display: none;
 }
 
 /* Header */
 .app-header {
-  height: 60px;
+  min-height: 58px;
   background: var(--bg-panel);
   border-bottom: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
+  padding: env(safe-area-inset-top, 0px) max(16px, env(safe-area-inset-right, 16px)) 0 max(16px, env(safe-area-inset-left, 16px));
   flex-shrink: 0;
   z-index: 10;
-  gap: 16px;
+  gap: 12px;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
 .brand-logo {
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   border-radius: 7px;
   background: var(--spectral-grad);
   box-shadow: 0 0 14px rgba(0, 216, 216, 0.35);
   position: relative;
+  flex-shrink: 0;
 }
 
 .brand-title {
@@ -67,6 +77,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  white-space: nowrap;
 }
 
 .badge {
@@ -85,25 +96,27 @@ body {
 .source-mode-switcher {
   display: flex;
   background: #0b0d14;
-  padding: 4px;
+  padding: 3px;
   border-radius: 8px;
   border: 1px solid var(--border-color);
   gap: 4px;
+  flex-shrink: 0;
 }
 
 .source-tab {
   background: transparent;
   color: var(--text-muted);
   border: none;
-  padding: 6px 14px;
+  padding: 6px 12px;
   border-radius: 6px;
   font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   transition: all 0.15s ease;
+  white-space: nowrap;
 }
 
 .source-tab:hover {
@@ -123,6 +136,7 @@ body {
   border-radius: 50%;
   background: #666;
   display: inline-block;
+  flex-shrink: 0;
 }
 
 .source-tab.active .live-dot.webcam-dot {
@@ -140,12 +154,22 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding: 4px 0;
+}
+
+.header-actions::-webkit-scrollbar {
+  display: none;
 }
 
 .action-group {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .btn {
@@ -162,6 +186,13 @@ body {
   gap: 6px;
   transition: all 0.15s ease;
   white-space: nowrap;
+  flex-shrink: 0;
+  touch-action: manipulation;
+}
+
+.btn-compact {
+  padding: 4px 10px;
+  font-size: 11px;
 }
 
 .btn:hover {
@@ -217,6 +248,8 @@ body {
   flex: 1;
   display: flex;
   overflow: hidden;
+  min-width: 0;
+  min-height: 0;
 }
 
 /* Left / Center Viewport */
@@ -227,25 +260,35 @@ body {
   background: radial-gradient(circle at center, #141724 0%, #08090d 100%);
   position: relative;
   overflow: hidden;
+  min-width: 0;
+  min-height: 0;
 }
 
 /* Mode Selector Bar at Top of Viewport */
 .mode-tabs-bar {
   display: flex;
   gap: 10px;
-  padding: 12px 20px;
+  padding: 10px 16px;
   background: rgba(17, 19, 28, 0.85);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border-color);
   z-index: 5;
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.mode-tabs-bar::-webkit-scrollbar {
+  display: none;
 }
 
 .mode-card {
   flex: 1;
+  min-width: 140px;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  padding: 9px 12px;
+  padding: 8px 12px;
   cursor: pointer;
   transition: all 0.16s ease;
   display: flex;
@@ -253,6 +296,7 @@ body {
   gap: 3px;
   position: relative;
   overflow: hidden;
+  touch-action: manipulation;
 }
 
 .mode-card:hover {
@@ -282,12 +326,16 @@ body {
   text-transform: uppercase;
   color: var(--accent-cyan);
   letter-spacing: 0.6px;
+  white-space: nowrap;
 }
 
 .mode-name {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .mode-desc {
@@ -304,9 +352,15 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 20px;
+  padding: 14px;
   overflow: auto;
   position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+.canvas-stage.grid-mode-active {
+  align-items: flex-start;
 }
 
 .single-canvas-wrapper {
@@ -316,11 +370,17 @@ body {
   justify-content: center;
   height: 100%;
   width: 100%;
+  min-width: 0;
+  min-height: 0;
 }
 
 #mainCanvas {
   max-height: 100%;
   max-width: 100%;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
   object-fit: contain;
   border-radius: 6px;
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.75), 0 0 1px rgba(255, 255, 255, 0.15);
@@ -338,9 +398,9 @@ body {
   background: rgba(9, 10, 15, 0.86);
   backdrop-filter: blur(8px);
   z-index: 8;
-  gap: 14px;
+  gap: 12px;
   text-align: center;
-  padding: 24px;
+  padding: 20px;
 }
 
 .webcam-overlay-prompt.visible {
@@ -348,7 +408,7 @@ body {
 }
 
 .webcam-overlay-prompt h3 {
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 700;
 }
 
@@ -362,13 +422,14 @@ body {
 /* Grid View for All 5 Images */
 .grid-canvas-wrapper {
   display: none;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
   width: 100%;
   max-width: 1400px;
-  align-items: center;
+  align-items: start;
   justify-items: center;
-  padding: 10px;
+  padding: 6px;
+  margin: 0 auto;
 }
 
 .grid-canvas-wrapper.active {
@@ -410,31 +471,52 @@ body {
 
 /* Filmstrip / Webcam Bottom Bar */
 .filmstrip-bar {
-  height: 92px;
+  min-height: 76px;
   background: var(--bg-panel);
   border-top: 1px solid var(--border-color);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
+  padding: 6px 16px;
   gap: 12px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.still-filmstrip-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 12px;
+  min-width: 0;
+}
+
+.filmstrip-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: right;
   flex-shrink: 0;
 }
 
 .thumbnails-list {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   overflow-x: auto;
-  padding: 6px 0;
+  padding: 4px 0;
+  min-width: 0;
+  flex: 1;
+  scrollbar-width: thin;
 }
 
 .webcam-status-bar {
   display: none;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   width: 100%;
   justify-content: space-between;
+  min-width: 0;
 }
 
 .webcam-status-bar.active {
@@ -444,19 +526,31 @@ body {
 .webcam-controls-inline {
   display: flex;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 8px;
+  overflow-x: auto;
+  min-width: 0;
+  scrollbar-width: none;
+}
+
+.webcam-controls-inline::-webkit-scrollbar {
+  display: none;
 }
 
 .inline-control-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   background: var(--bg-card);
   border: 1px solid var(--border-color);
-  padding: 6px 12px;
+  padding: 5px 10px;
   border-radius: 6px;
   font-size: 12px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.inline-label {
+  color: var(--text-muted);
 }
 
 .inline-control-item select {
@@ -467,14 +561,28 @@ body {
   font-size: 12px;
 }
 
+.webcam-telemetry-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.webcam-meta-text {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: right;
+}
+
 .fps-pill {
   font-family: "SF Mono", Menlo, Monaco, Consolas, monospace;
   font-size: 11.5px;
   color: var(--accent-green);
   background: rgba(34, 229, 92, 0.12);
   border: 1px solid rgba(34, 229, 92, 0.3);
-  padding: 4px 10px;
+  padding: 4px 9px;
   border-radius: 6px;
+  white-space: nowrap;
 }
 
 .thumb-item {
@@ -484,7 +592,7 @@ body {
   background: var(--bg-card);
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  padding: 5px 10px 5px 6px;
+  padding: 4px 10px 4px 5px;
   cursor: pointer;
   transition: all 0.15s ease;
   flex-shrink: 0;
@@ -500,8 +608,8 @@ body {
 }
 
 .thumb-item img {
-  width: 44px;
-  height: 54px;
+  width: 38px;
+  height: 48px;
   object-fit: cover;
   border-radius: 4px;
 }
@@ -523,19 +631,57 @@ body {
   color: var(--text-muted);
 }
 
-/* Right Controls Sidebar */
+/* Right / Bottom Controls Sidebar */
 .controls-sidebar {
-  width: 360px;
+  width: clamp(280px, 30vw, 360px);
   background: var(--bg-panel);
   border-left: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   flex-shrink: 0;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+body.controls-collapsed .controls-sidebar {
+  display: none;
+}
+
+.sidebar-mobile-handle {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 14px 8px;
+  background: rgba(17, 19, 28, 0.96);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border-color);
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  gap: 4px;
+}
+
+.handle-pill {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.sidebar-mobile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  color: var(--accent-cyan);
 }
 
 .control-section {
-  padding: 16px 18px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -543,7 +689,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .section-title {
@@ -602,7 +748,7 @@ input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 5px;
+  height: 6px;
   background: #25293a;
   border-radius: 3px;
   outline: none;
@@ -611,8 +757,8 @@ input[type="range"] {
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   background: var(--accent-cyan);
   cursor: pointer;
@@ -648,8 +794,8 @@ select:focus {
 
 .checkbox-row input[type="checkbox"] {
   accent-color: var(--accent-cyan);
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   cursor: pointer;
 }
 
@@ -672,6 +818,7 @@ select:focus {
   cursor: pointer;
   text-align: center;
   transition: all 0.15s ease;
+  touch-action: manipulation;
 }
 
 .pill-btn:hover {
@@ -688,7 +835,7 @@ select:focus {
 
 .status-toast {
   position: fixed;
-  bottom: 108px;
+  bottom: 96px;
   left: 50%;
   transform: translateX(-50%);
   background: rgba(17, 19, 28, 0.95);
@@ -703,8 +850,208 @@ select:focus {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s ease;
+  white-space: nowrap;
+  max-width: 90vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .status-toast.visible {
   opacity: 1;
+}
+
+/* =========================================================
+   ADAPTIVE RESPONSIVE & ASPECT-RATIO RULES
+   ========================================================= */
+
+/* 1. Compact Header Labels & Mode Cards on Medium/Narrow Widths or Short Heights */
+@media (max-width: 1180px) {
+  .badge {
+    display: none;
+  }
+  .label-full {
+    display: none;
+  }
+  .label-short {
+    display: inline;
+  }
+  .app-header {
+    padding-left: max(12px, env(safe-area-inset-left, 12px));
+    padding-right: max(12px, env(safe-area-inset-right, 12px));
+    gap: 8px;
+  }
+  .btn {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+  .source-tab {
+    padding: 5px 10px;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 980px), (max-height: 700px) {
+  .mode-tabs-bar {
+    padding: 6px 12px;
+    gap: 6px;
+  }
+  .mode-card {
+    min-width: auto;
+    flex: 1 0 auto;
+    padding: 6px 10px;
+    gap: 1px;
+  }
+  .mode-desc {
+    display: none;
+  }
+  .mode-number {
+    font-size: 9px;
+  }
+  .mode-name {
+    font-size: 11.5px;
+  }
+  .shortcut-hint {
+    display: none;
+  }
+}
+
+/* 2. Portrait / Narrow Aspect Ratio: Docked Split View (Canvas Top ~55%, Controls Bottom ~45%) */
+@media (max-aspect-ratio: 9/10), (max-width: 820px) and (orientation: portrait), (max-width: 640px) {
+  .workspace {
+    flex-direction: column;
+  }
+
+  .viewport-container {
+    flex: 1 1 55%;
+    min-height: 180px;
+  }
+
+  .controls-sidebar {
+    width: 100%;
+    flex: 0 0 45%;
+    max-height: 46%;
+    border-left: none;
+    border-top: 1px solid var(--border-active);
+    box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.55);
+  }
+
+  .sidebar-mobile-handle {
+    display: flex;
+  }
+
+  .canvas-stage {
+    padding: 8px;
+  }
+
+  .filmstrip-bar {
+    min-height: 54px;
+    padding: 4px 10px;
+  }
+
+  .thumb-item {
+    padding: 3px 8px 3px 4px;
+    gap: 6px;
+  }
+
+  .thumb-item img {
+    width: 30px;
+    height: 36px;
+  }
+
+  .thumb-sub {
+    display: none;
+  }
+
+  .thumb-title {
+    font-size: 11px;
+  }
+}
+
+/* 3. Ultra-Narrow Mobile Header (Phones in Portrait) */
+@media (max-width: 560px) {
+  .app-header {
+    min-height: 48px;
+    gap: 6px;
+  }
+  .brand-name {
+    display: none;
+  }
+  .brand-logo {
+    width: 24px;
+    height: 24px;
+  }
+  .btn {
+    padding: 5px 8px;
+    font-size: 11.5px;
+    gap: 4px;
+  }
+  .source-tab {
+    padding: 5px 8px;
+    font-size: 11.5px;
+    gap: 4px;
+  }
+  .grid-canvas-wrapper {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+  .inline-label {
+    display: none;
+  }
+}
+
+/* 4. Short Landscape Aspect Ratio (Mobile Landscape / Compact Split Windows) */
+@media (max-height: 540px) and (orientation: landscape) {
+  .app-header {
+    min-height: 42px;
+  }
+  .mode-tabs-bar {
+    padding: 4px 10px;
+  }
+  .mode-card {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+  }
+  .mode-number {
+    display: none;
+  }
+  .canvas-stage {
+    padding: 6px;
+  }
+  .filmstrip-bar {
+    min-height: 46px;
+    padding: 3px 10px;
+  }
+  .thumb-item img {
+    width: 26px;
+    height: 32px;
+  }
+  .thumb-sub {
+    display: none;
+  }
+  .controls-sidebar {
+    width: clamp(240px, 34vw, 310px);
+  }
+  .control-section {
+    padding: 10px 12px;
+  }
+}
+
+/* 5. Coarse Pointer (Touchscreen) Ergonomics */
+@media (pointer: coarse) {
+  input[type="range"] {
+    height: 8px;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    width: 20px;
+    height: 20px;
+  }
+  .checkbox-row {
+    padding: 6px 0;
+  }
+  .checkbox-row input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+  }
 }

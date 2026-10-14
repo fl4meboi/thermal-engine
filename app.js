@@ -729,6 +729,27 @@ function renderThermalHUD(targetCtx, thermalData, sourceLabel) {
   targetCtx.restore();
 }
 
+// Dynamically fit mainCanvas CSS dimensions to singleViewWrapper while preserving exact aspect ratio
+function fitMainCanvasToStage() {
+  const wrapper = document.getElementById("singleViewWrapper");
+  if (!wrapper || isGridView) return;
+  const availW = wrapper.clientWidth;
+  const availH = wrapper.clientHeight;
+  if (availW <= 0 || availH <= 0 || !mainCanvas.width || !mainCanvas.height) return;
+  const canvasAspect = mainCanvas.width / mainCanvas.height;
+  const wrapperAspect = availW / availH;
+  let cssW, cssH;
+  if (canvasAspect > wrapperAspect) {
+    cssW = availW;
+    cssH = Math.max(1, Math.round(availW / canvasAspect));
+  } else {
+    cssH = availH;
+    cssW = Math.max(1, Math.round(availH * canvasAspect));
+  }
+  mainCanvas.style.width = `${cssW}px`;
+  mainCanvas.style.height = `${cssH}px`;
+}
+
 // Render a still portrait onto a given canvas
 function renderPortraitToCanvas(imgEntry, canvas) {
   if (!imgEntry || !imgEntry.loaded) return;
@@ -736,6 +757,9 @@ function renderPortraitToCanvas(imgEntry, canvas) {
   if (canvas.width !== width || canvas.height !== height) {
     canvas.width = width;
     canvas.height = height;
+    if (canvas === mainCanvas) {
+      fitMainCanvasToStage();
+    }
   }
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
@@ -810,6 +834,8 @@ async function startWebcam(deviceId = "") {
     };
     if (deviceId) {
       constraints.video.deviceId = { exact: deviceId };
+    } else {
+      constraints.video.facingMode = "user";
     }
 
     webcamStream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -899,6 +925,7 @@ function renderWebcamFrame() {
   if (mainCanvas.width !== targetW || mainCanvas.height !== targetH) {
     mainCanvas.width = targetW;
     mainCanvas.height = targetH;
+    fitMainCanvasToStage();
   }
 
   if (isHoldingOriginal) {
@@ -980,10 +1007,10 @@ function updateFreezeBtnUI() {
   if (!btn) return;
   if (webcamFrozen) {
     btn.classList.add("active");
-    btn.innerHTML = `<span>▶</span> Resume Live`;
+    btn.innerHTML = `<span>▶</span><span class="label-full">Resume Live</span><span class="label-short">Resume</span>`;
   } else {
     btn.classList.remove("active");
-    btn.innerHTML = `<span>⏸</span> Freeze Frame`;
+    btn.innerHTML = `<span>⏸</span><span class="label-full">Freeze Frame</span><span class="label-short">Freeze</span>`;
   }
 }
 
@@ -1046,7 +1073,7 @@ function startVideoRecording() {
   isRecording = true;
   const recBtn = document.getElementById("recordWebcamBtn");
   recBtn.classList.add("recording");
-  recBtn.innerHTML = `<span>■</span> Stop Recording`;
+  recBtn.innerHTML = `<span>■</span><span class="label-full">Stop Recording</span><span class="label-short">Stop</span>`;
   showToast("Recording live thermal video...");
 }
 
@@ -1058,7 +1085,7 @@ function stopVideoRecording() {
   const recBtn = document.getElementById("recordWebcamBtn");
   if (recBtn) {
     recBtn.classList.remove("recording");
-    recBtn.innerHTML = `<span>●</span> Record Video`;
+    recBtn.innerHTML = `<span>●</span><span class="label-full">Record Video</span><span class="label-short">Rec</span>`;
   }
 }
 
@@ -1086,6 +1113,7 @@ function requestRender() {
       renderAllGridCanvases();
     } else if (imagesList[activeIndex]) {
       renderPortraitToCanvas(imagesList[activeIndex], mainCanvas);
+      fitMainCanvasToStage();
       const { width, height } = imagesList[activeIndex].cache || { width: 928, height: 1152 };
       document.getElementById("resolutionLabel").textContent = `${width} × ${height} px`;
     }
@@ -1102,7 +1130,7 @@ function renderAllGridCanvases() {
       const c = document.createElement("canvas");
       const label = document.createElement("div");
       label.className = "grid-item-label";
-      label.innerHTML = `<span>${entry.name}</span><span style="color:var(--accent-cyan)">Click to Focus</span>`;
+      label.innerHTML = `<span>${entry.name}</span><span style="color:var(--accent-cyan)">Tap to Focus</span>`;
       card.appendChild(c);
       card.appendChild(label);
       card.addEventListener("click", () => {
@@ -1123,15 +1151,19 @@ function toggleGridView(forceState) {
   isGridView = typeof forceState === "boolean" ? forceState : !isGridView;
   const singleW = document.getElementById("singleViewWrapper");
   const gridW = document.getElementById("gridViewWrapper");
+  const stageEl = document.querySelector(".canvas-stage");
   const btn = document.getElementById("toggleGridBtn");
   if (isGridView) {
     singleW.style.display = "none";
     gridW.classList.add("active");
+    if (stageEl) stageEl.classList.add("grid-mode-active");
     btn.classList.add("active");
   } else {
     singleW.style.display = "flex";
     gridW.classList.remove("active");
+    if (stageEl) stageEl.classList.remove("grid-mode-active");
     btn.classList.remove("active");
+    fitMainCanvasToStage();
   }
   requestRender();
 }
@@ -1139,7 +1171,11 @@ function toggleGridView(forceState) {
 function updateThumbnailsActive() {
   const listEl = document.getElementById("thumbnailsList");
   Array.from(listEl.children).forEach((el, idx) => {
-    el.classList.toggle("active", idx === activeIndex);
+    const isActive = idx === activeIndex;
+    el.classList.toggle("active", isActive);
+    if (isActive && el.scrollIntoView) {
+      el.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+    }
   });
 }
 
@@ -1183,6 +1219,22 @@ function downloadCanvasPNG(canvas, filename) {
   document.body.removeChild(link);
 }
 
+function toggleControlsPanel(forceCollapsed) {
+  const isCollapsed = typeof forceCollapsed === "boolean"
+    ? forceCollapsed
+    : !document.body.classList.contains("controls-collapsed");
+  document.body.classList.toggle("controls-collapsed", isCollapsed);
+  const toggleBtn = document.getElementById("toggleControlsBtn");
+  if (toggleBtn) {
+    toggleBtn.classList.toggle("active", !isCollapsed);
+    toggleBtn.setAttribute("aria-expanded", String(!isCollapsed));
+  }
+  requestAnimationFrame(() => {
+    fitMainCanvasToStage();
+    drawPalettePreview();
+  });
+}
+
 // Bind UI Controls
 function initControls() {
   // Top-level Source Mode Switcher (Still Image vs Real-Time Webcam)
@@ -1192,6 +1244,28 @@ function initControls() {
   document.getElementById("retryWebcamBtn").addEventListener("click", () => {
     const selectedDevice = document.getElementById("cameraDeviceSelect").value;
     startWebcam(selectedDevice);
+  });
+
+  // Controls Panel Toggle (Header & Mobile Handle)
+  const toggleControlsBtn = document.getElementById("toggleControlsBtn");
+  if (toggleControlsBtn) {
+    toggleControlsBtn.addEventListener("click", () => toggleControlsPanel());
+  }
+  const collapseMobileBtn = document.getElementById("collapseSidebarMobileBtn");
+  if (collapseMobileBtn) {
+    collapseMobileBtn.addEventListener("click", () => toggleControlsPanel(true));
+  }
+
+  // Observe stage resize to keep canvas fitted in any aspect ratio or orientation
+  const singleViewWrapper = document.getElementById("singleViewWrapper");
+  if (window.ResizeObserver && singleViewWrapper) {
+    const ro = new ResizeObserver(() => {
+      fitMainCanvasToStage();
+    });
+    ro.observe(singleViewWrapper);
+  }
+  window.addEventListener("resize", () => {
+    fitMainCanvasToStage();
   });
 
   // Webcam bottom bar controls
@@ -1233,6 +1307,9 @@ function initControls() {
     card.addEventListener("click", () => {
       document.querySelectorAll(".mode-card").forEach((c) => c.classList.remove("active"));
       card.classList.add("active");
+      if (card.scrollIntoView) {
+        card.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+      }
       state.mode = card.dataset.mode;
 
       if (state.mode === "layered") {
@@ -1337,12 +1414,54 @@ function initControls() {
   // Grid View toggle
   document.getElementById("toggleGridBtn").addEventListener("click", () => toggleGridView());
 
-  // Hold for Original
+  // Hold for Original (Mouse + Touch / Pointer support)
   const holdBtn = document.getElementById("holdOriginalBtn");
-  const startHold = () => { isHoldingOriginal = true; holdBtn.classList.add("active"); requestRender(); };
-  const endHold = () => { isHoldingOriginal = false; holdBtn.classList.remove("active"); requestRender(); };
+  const startHold = (e) => {
+    if (e && e.cancelable && e.type.startsWith("touch")) e.preventDefault();
+    isHoldingOriginal = true;
+    holdBtn.classList.add("active");
+    requestRender();
+  };
+  const endHold = () => {
+    if (!isHoldingOriginal) return;
+    isHoldingOriginal = false;
+    holdBtn.classList.remove("active");
+    requestRender();
+  };
   holdBtn.addEventListener("mousedown", startHold);
-  window.addEventListener("mouseup", () => { if (isHoldingOriginal) endHold(); });
+  holdBtn.addEventListener("touchstart", startHold, { passive: false });
+  window.addEventListener("mouseup", endHold);
+  window.addEventListener("touchend", endHold);
+  window.addEventListener("touchcancel", endHold);
+
+  // Horizontal touch swipe on canvas stage to switch portraits in Still Mode
+  let touchStartX = 0;
+  let touchStartY = 0;
+  if (singleViewWrapper) {
+    singleViewWrapper.addEventListener("touchstart", (e) => {
+      if (e.touches.length === 1) {
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+      }
+    }, { passive: true });
+
+    singleViewWrapper.addEventListener("touchend", (e) => {
+      if (state.sourceMode !== "still" || isGridView || imagesList.length <= 1) return;
+      if (e.changedTouches.length === 1) {
+        const dx = e.changedTouches[0].clientX - touchStartX;
+        const dy = e.changedTouches[0].clientY - touchStartY;
+        if (Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+          if (dx < 0) {
+            activeIndex = (activeIndex + 1) % imagesList.length;
+          } else {
+            activeIndex = (activeIndex - 1 + imagesList.length) % imagesList.length;
+          }
+          updateThumbnailsActive();
+          requestRender();
+        }
+      }
+    }, { passive: true });
+  }
 
   // Export Current Still
   document.getElementById("exportCurrentBtn").addEventListener("click", () => {
@@ -1455,6 +1574,7 @@ function addImageEntry(item, switchToNew = false) {
 function init() {
   initControls();
   buildLUT();
+  fitMainCanvasToStage();
   if (window.PORTRAIT_IMAGES && window.PORTRAIT_IMAGES.length > 0) {
     window.PORTRAIT_IMAGES.forEach((item) => addImageEntry(item, false));
   }

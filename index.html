@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>THERMAL // Code-Art Portrait &amp; Live Webcam Stylizer</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -12,7 +12,7 @@
     <div class="brand">
       <div class="brand-logo"></div>
       <div class="brand-title">
-        THERMAL STUDIO
+        <span class="brand-name">THERMAL STUDIO</span>
         <span class="badge">Code-Art Engine</span>
       </div>
     </div>
@@ -20,47 +20,73 @@
     <!-- Top-Level Mode Switcher: 1. Still Image Mode | 2. Real-Time Webcam Mode -->
     <div class="source-mode-switcher">
       <button id="sourceStillBtn" class="source-tab active" data-source="still">
-        <span>🖼</span> 1. Still Image Mode
+        <span>🖼</span>
+        <span class="label-full">1. Still Image Mode</span>
+        <span class="label-short">Still</span>
       </button>
       <button id="sourceWebcamBtn" class="source-tab" data-source="webcam">
-        <span class="live-dot webcam-dot"></span> 2. Real-Time Webcam Mode
+        <span class="live-dot webcam-dot"></span>
+        <span class="label-full">2. Real-Time Webcam Mode</span>
+        <span class="label-short">Live Cam</span>
       </button>
     </div>
 
     <div class="header-actions">
       <button id="holdOriginalBtn" class="btn" title="Hold to compare unstylized input">
-        <span>👁</span> Hold for Original
+        <span>👁</span>
+        <span class="label-full">Hold for Original</span>
+        <span class="label-short">Original</span>
       </button>
 
       <!-- Still Image Mode Actions -->
       <div id="stillActionsGroup" class="action-group">
-        <button id="toggleGridBtn" class="btn" title="Compare all 5 portraits side by side">
-          <span>⊞</span> View All 5
+        <button id="toggleGridBtn" class="btn" title="Compare all portraits side by side">
+          <span>⊞</span>
+          <span class="label-full">View All 5</span>
+          <span class="label-short">Grid</span>
         </button>
         <label class="btn" for="uploadInput" title="Load additional images">
-          <span>＋</span> Add Image
+          <span>＋</span>
+          <span class="label-full">Add Image</span>
+          <span class="label-short">Add</span>
           <input id="uploadInput" type="file" accept="image/*" multiple style="display:none;" />
         </label>
-        <button id="exportCurrentBtn" class="btn btn-primary">
-          <span>↓</span> Export PNG
+        <button id="exportCurrentBtn" class="btn btn-primary" title="Export current portrait as PNG">
+          <span>↓</span>
+          <span class="label-full">Export PNG</span>
+          <span class="label-short">Export</span>
         </button>
-        <button id="exportAllBtn" class="btn btn-spectral">
-          <span>⇊</span> Batch Export All 5
+        <button id="exportAllBtn" class="btn btn-spectral" title="Batch export all portraits">
+          <span>⇊</span>
+          <span class="label-full">Batch Export All 5</span>
+          <span class="label-short">Batch</span>
         </button>
       </div>
 
       <!-- Real-Time Webcam Mode Actions -->
       <div id="webcamActionsGroup" class="action-group" style="display:none;">
         <button id="freezeWebcamBtn" class="btn" title="Freeze / Resume live webcam feed">
-          <span>⏸</span> Freeze Frame
+          <span>⏸</span>
+          <span class="label-full">Freeze Frame</span>
+          <span class="label-short">Freeze</span>
         </button>
         <button id="snapshotWebcamBtn" class="btn btn-primary" title="Save current webcam frame as PNG">
-          <span>📸</span> Snapshot PNG
+          <span>📸</span>
+          <span class="label-full">Snapshot PNG</span>
+          <span class="label-short">Snap</span>
         </button>
         <button id="recordWebcamBtn" class="btn btn-danger" title="Record real-time thermal video clip">
-          <span>●</span> Record Video
+          <span>●</span>
+          <span class="label-full">Record Video</span>
+          <span class="label-short">Rec</span>
         </button>
       </div>
+
+      <button id="toggleControlsBtn" class="btn active" title="Show / Hide parameter controls panel" aria-expanded="true">
+        <span>⚙</span>
+        <span class="label-full">Controls</span>
+        <span class="label-short">Tune</span>
+      </button>
     </div>
   </header>
 
@@ -114,11 +140,11 @@
       <!-- Bottom Bar: Filmstrip (Still Mode) OR Webcam Telemetry Bar (Webcam Mode) -->
       <div class="filmstrip-bar">
         <!-- Still Mode Filmstrip -->
-        <div id="stillFilmstripContainer" style="display:flex; align-items:center; justify-content:space-between; width:100%; gap:12px;">
+        <div id="stillFilmstripContainer" class="still-filmstrip-container">
           <div id="thumbnailsList" class="thumbnails-list"></div>
-          <div style="font-size:11px; color:var(--text-muted); text-align:right; flex-shrink:0;">
+          <div class="filmstrip-meta">
             <div id="resolutionLabel" style="color:var(--text-main); font-weight:600;">928 × 1152 px</div>
-            <div>Use ← / → keys to switch portraits • 1–4 for styles</div>
+            <div class="shortcut-hint">Use ← / → keys to switch portraits • 1–4 for styles</div>
           </div>
         </div>
 
@@ -126,14 +152,14 @@
         <div id="webcamStatusBar" class="webcam-status-bar">
           <div class="webcam-controls-inline">
             <div class="inline-control-item">
-              <span style="color:var(--text-muted);">Camera:</span>
+              <span class="inline-label">Camera:</span>
               <select id="cameraDeviceSelect">
                 <option value="">Default Webcam</option>
               </select>
             </div>
 
             <div class="inline-control-item">
-              <span style="color:var(--text-muted);">Processing Res:</span>
+              <span class="inline-label">Res:</span>
               <select id="webcamResSelect">
                 <option value="480">Fast (640 × 480 • 60fps)</option>
                 <option value="640" selected>Balanced (854 × 640)</option>
@@ -143,23 +169,30 @@
 
             <label class="inline-control-item" style="cursor:pointer;">
               <input type="checkbox" id="mirrorWebcam" checked style="accent-color:var(--accent-cyan);" />
-              <span>Mirror Video</span>
+              <span>Mirror</span>
             </label>
           </div>
 
-          <div style="display:flex; align-items:center; gap:14px;">
+          <div class="webcam-telemetry-right">
             <span id="fpsCounter" class="fps-pill">-- FPS</span>
-            <div style="font-size:11px; color:var(--text-muted); text-align:right;">
+            <div class="webcam-meta-text">
               <div id="webcamResLabel" style="color:var(--text-main); font-weight:600;">LIVE IR STREAM</div>
-              <div>All right-hand sliders apply in real time</div>
+              <div class="shortcut-hint">All sliders apply in real time</div>
             </div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Right Controls Sidebar (Shared between Still Image Mode & Real-Time Webcam Mode) -->
-    <aside class="controls-sidebar">
+    <!-- Right / Bottom Docked Controls Sidebar (Shared between Still Image Mode & Real-Time Webcam Mode) -->
+    <aside id="controlsSidebar" class="controls-sidebar">
+      <div class="sidebar-mobile-handle" id="sidebarHandleBar">
+        <div class="handle-pill"></div>
+        <div class="sidebar-mobile-header">
+          <span>THERMAL PARAMETERS</span>
+          <button id="collapseSidebarMobileBtn" class="btn btn-compact" type="button">Hide Panel ▾</button>
+        </div>
+      </div>
       <!-- Palette Section -->
       <div class="control-section">
         <div class="section-header">
