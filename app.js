@@ -1407,7 +1407,7 @@ function renderWebcamFrame() {
 
   applyThermalBloom(mainCtx, targetW, targetH, normCrowd);
 
-  if (state.showHud) {
+  if (state.mode === "layered") {
     renderThermalHUD(mainCtx, thermalData);
   }
 }
@@ -1424,79 +1424,475 @@ function updateFreezeBtnUI() {
   }
 }
 
-function toggleVideoRecording() {
-  if (isRecording) {
-    stopVideoRecording();
+// ==========================================
+// 3-SECOND COUNTDOWN, GIF89a ENCODER & QR DOWNLOAD CARD
+// ==========================================
+
+let captureBusy = false;
+let currentCaptureObjectUrl = null;
+
+function triggerShutterFlash() {
+  const flash = document.getElementById("captureFlashOverlay");
+  if (!flash) return;
+  flash.classList.add("flash-active");
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      flash.classList.remove("flash-active");
+    }, 60);
+  });
+}
+
+function runThreeSecondCountdown(labelText) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById("captureCountdownOverlay");
+    const labelEl = document.getElementById("captureCountdownLabel");
+    const numEl = document.getElementById("captureCountdownNumber");
+    const progTrack = document.getElementById("captureProgressTrack");
+
+    if (labelEl) labelEl.textContent = labelText;
+    if (progTrack) progTrack.style.display = "none";
+    if (overlay) overlay.classList.add("visible");
+
+    let remaining = 3;
+    if (numEl) numEl.textContent = String(remaining);
+
+    const stepTimer = setInterval(() => {
+      remaining--;
+      if (remaining > 0) {
+        if (numEl) numEl.textContent = String(remaining);
+      } else {
+        clearInterval(stepTimer);
+        if (overlay) overlay.classList.remove("visible");
+        resolve();
+      }
+    }, 1000);
+  });
+}
+
+// Fast Pure-JS Animated GIF89a Encoder (256-color thermal + RGB cube palette with LZW compression)
+function encodeAnimatedGIF(imageDataFrames, width, height, delayCs = 10) {
+  // 1. Build 256-color Global Color Table:
+  //    0..215: 6x6x6 RGB cube
+  //    216..255: 40 evenly spaced colors from active thermal LUT
+  const palette = new Uint8Array(256 * 3);
+  let pIdx = 0;
+  const levels = [0, 51, 102, 153, 204, 255];
+  for (let r = 0; r < 6; r++) {
+    for (let g = 0; g < 6; g++) {
+      for (let b = 0; b < 6; b++) {
+        palette[pIdx * 3] = levels[r];
+        palette[pIdx * 3 + 1] = levels[g];
+        palette[pIdx * 3 + 2] = levels[b];
+        pIdx++;
+      }
+    }
+  }
+  for (let k = 0; k < 40; k++) {
+    const lutPos = Math.min(1023, Math.round((k / 39) * 1023)) * 3;
+    palette[pIdx * 3] = lut[lutPos];
+    palette[pIdx * 3 + 1] = lut[lutPos + 1];
+    palette[pIdx * 3 + 2] = lut[lutPos + 2];
+    pIdx++;
+  }
+
+  // Precompute 15-bit RGB (32x32x32) -> nearest palette index lookup table
+  const rgb15ToIdx = new Uint8Array(32768);
+  for (let r5 = 0; r5 < 32; r5++) {
+    const r = (r5 << 3) | (r5 >> 2);
+    for (let g5 = 0; g5 < 32; g5++) {
+      const g = (g5 << 3) | (g5 >> 2);
+      for (let b5 = 0; b5 < 32; b5++) {
+        const b = (b5 << 3) | (b5 >> 2);
+        let bestIdx = 0;
+        let bestDist = 1e9;
+        for (let i = 0; i < 256; i++) {
+          const dr = r - palette[i * 3];
+          const dg = g - palette[i * 3 + 1];
+          const db = b - palette[i * 3 + 2];
+          const dist = dr * dr + dg * dg + db * db;
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestIdx = i;
+            if (dist === 0) break;
+          }
+        }
+        rgb15ToIdx[(r5 << 10) | (g5 << 5) | b5] = bestIdx;
+      }
+    }
+  }
+
+  const bytes = [];
+  const writeByte = (b) => bytes.push(b & 0xff);
+  const writeShort = (v) => {
+    bytes.push(v & 0xff, (v >> 8) & 0xff);
+  };
+  const writeAscii = (str) => {
+    for (let i = 0; i < str.length; i++) bytes.push(str.charCodeAt(i));
+  };
+
+  // Header + Logical Screen Descriptor
+  writeAscii("GIF89a");
+  writeShort(width);
+  writeShort(height);
+  writeByte(0xf7); // Global color table, 8-bit, 256 entries
+  writeByte(0);    // Background index
+  writeByte(0);    // Aspect ratio
+
+  // Global Color Table (768 bytes)
+  for (let i = 0; i < palette.length; i++) {
+    writeByte(palette[i]);
+  }
+
+  // Netscape 2.0 Infinite Loop Extension
+  writeByte(0x21);
+  writeByte(0xff);
+  writeByte(0x0b);
+  writeAscii("NETSCAPE2.0");
+  writeByte(0x03);
+  writeByte(0x01);
+  writeShort(0); // Loop forever
+  writeByte(0x00);
+
+  const dict = new Int32Array(4096 * 256);
+  const subBlock = new Uint8Array(255);
+  const indexPixels = new Uint8Array(width * height);
+
+  // Encode each frame
+  for (let f = 0; f < imageDataFrames.length; f++) {
+    const rgba = imageDataFrames[f];
+    for (let i = 0, p = 0; i < indexPixels.length; i++, p += 4) {
+      const key15 = ((rgba[p] >> 3) << 10) | ((rgba[p + 1] >> 3) << 5) | (rgba[p + 2] >> 3);
+      indexPixels[i] = rgb15ToIdx[key15];
+    }
+
+    // Graphic Control Extension
+    writeByte(0x21);
+    writeByte(0xf9);
+    writeByte(0x04);
+    writeByte(0x04); // Disposal method 1 (do not dispose)
+    writeShort(delayCs);
+    writeByte(0x00);
+    writeByte(0x00);
+
+    // Image Descriptor
+    writeByte(0x2c);
+    writeShort(0);
+    writeShort(0);
+    writeShort(width);
+    writeShort(height);
+    writeByte(0x00); // No local color table
+
+    // LZW Image Data
+    const minCodeSize = 8;
+    const clearCode = 256;
+    const eoiCode = 257;
+    writeByte(minCodeSize);
+
+    let subLen = 0;
+    let bitBuf = 0;
+    let bitCnt = 0;
+
+    const flushSub = () => {
+      if (subLen > 0) {
+        writeByte(subLen);
+        for (let k = 0; k < subLen; k++) writeByte(subBlock[k]);
+        subLen = 0;
+      }
+    };
+
+    const emitCode = (code, size) => {
+      bitBuf |= code << bitCnt;
+      bitCnt += size;
+      while (bitCnt >= 8) {
+        subBlock[subLen++] = bitBuf & 0xff;
+        if (subLen === 255) flushSub();
+        bitBuf >>>= 8;
+        bitCnt -= 8;
+      }
+    };
+
+    dict.fill(-1);
+    let codeSize = 9;
+    let nextCode = 258;
+
+    emitCode(clearCode, codeSize);
+    let prefix = indexPixels[0];
+    for (let i = 1; i < indexPixels.length; i++) {
+      const suffix = indexPixels[i];
+      const dKey = (prefix << 8) | suffix;
+      const entry = dict[dKey];
+      if (entry !== -1) {
+        prefix = entry;
+      } else {
+        emitCode(prefix, codeSize);
+        if (nextCode < 4096) {
+          dict[dKey] = nextCode;
+          if (nextCode === (1 << codeSize) && codeSize < 12) {
+            codeSize++;
+          }
+          nextCode++;
+        } else {
+          emitCode(clearCode, codeSize);
+          dict.fill(-1);
+          codeSize = 9;
+          nextCode = 258;
+        }
+        prefix = suffix;
+      }
+    }
+    emitCode(prefix, codeSize);
+    emitCode(eoiCode, codeSize);
+
+    if (bitCnt > 0) {
+      subBlock[subLen++] = bitBuf & 0xff;
+    }
+    flushSub();
+    writeByte(0x00); // Block terminator
+  }
+
+  // GIF Trailer
+  writeByte(0x3b);
+  return new Blob([new Uint8Array(bytes)], { type: "image/gif" });
+}
+
+// Upload captured PNG or GIF to a temporary public URL so phones can scan the QR code to download
+async function uploadCaptureForQr(blob, filename) {
+  // Provider 1: tmpfiles.org (CORS-enabled, returns JSON with URL)
+  try {
+    const fd1 = new FormData();
+    fd1.append("file", blob, filename);
+    const res1 = await fetch("https://tmpfiles.org/api/v1/upload", {
+      method: "POST",
+      body: fd1
+    });
+    if (res1.ok) {
+      const json1 = await res1.json();
+      if (json1 && json1.data && json1.data.url) {
+        // Convert view URL https://tmpfiles.org/12345/file.png -> direct download https://tmpfiles.org/dl/12345/file.png
+        const rawUrl = json1.data.url.replace(/^http:\/\//i, "https://");
+        return rawUrl.replace("https://tmpfiles.org/", "https://tmpfiles.org/dl/");
+      }
+    }
+  } catch (e) {
+    // Try next provider
+  }
+
+  // Provider 2: uguu.se (CORS-enabled, returns direct download link)
+  try {
+    const fd2 = new FormData();
+    fd2.append("files[]", blob, filename);
+    const res2 = await fetch("https://uguu.se/upload", {
+      method: "POST",
+      body: fd2
+    });
+    if (res2.ok) {
+      const json2 = await res2.json();
+      if (json2 && json2.files && json2.files[0] && json2.files[0].url) {
+        return json2.files[0].url;
+      }
+    }
+  } catch (e) {
+    // Try next provider
+  }
+
+  // Provider 3: litterbox.catbox.moe (1h temporary storage)
+  try {
+    const fd3 = new FormData();
+    fd3.append("reqtype", "fileupload");
+    fd3.append("time", "1h");
+    fd3.append("fileToUpload", blob, filename);
+    const res3 = await fetch("https://litterbox.catbox.moe/resources/internals/api.php", {
+      method: "POST",
+      body: fd3
+    });
+    if (res3.ok) {
+      const textUrl = (await res3.text()).trim();
+      if (textUrl.startsWith("https://")) {
+        return textUrl;
+      }
+    }
+  } catch (e) {
+    // Fallback
+  }
+
+  return null;
+}
+
+function renderQrCodeToMount(url, mountEl) {
+  mountEl.innerHTML = "";
+  if (typeof window.qrcode === "function") {
+    try {
+      const qr = window.qrcode(0, "M");
+      qr.addData(url);
+      qr.make();
+      mountEl.innerHTML = qr.createSvgTag({ cellSize: 3, margin: 1, scalable: true });
+      mountEl.classList.add("ready");
+      return;
+    } catch (e) {
+      // Fallback to QR image API
+    }
+  }
+  const img = new Image();
+  img.alt = "Scan QR to download";
+  img.src = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&margin=4&data=${encodeURIComponent(url)}`;
+  mountEl.appendChild(img);
+  mountEl.classList.add("ready");
+}
+
+async function presentCaptureWithQR(blob, filename, titleText) {
+  if (currentCaptureObjectUrl) {
+    URL.revokeObjectURL(currentCaptureObjectUrl);
+  }
+  currentCaptureObjectUrl = URL.createObjectURL(blob);
+
+  const card = document.getElementById("captureQrCard");
+  const titleEl = document.getElementById("qrCardTitle");
+  const previewImg = document.getElementById("qrPreviewImg");
+  const spinnerEl = document.getElementById("qrSpinner");
+  const mountEl = document.getElementById("qrCanvasMount");
+  const statusEl = document.getElementById("qrStatusText");
+  const dlBtn = document.getElementById("qrDownloadBtn");
+
+  if (titleEl) titleEl.textContent = titleText;
+  if (previewImg) previewImg.src = currentCaptureObjectUrl;
+  if (dlBtn) {
+    dlBtn.href = currentCaptureObjectUrl;
+    dlBtn.download = filename;
+    dlBtn.textContent = filename.endsWith(".gif") ? "↓ Save GIF" : "↓ Save PNG";
+  }
+
+  if (mountEl) {
+    mountEl.innerHTML = "";
+    mountEl.classList.remove("ready");
+  }
+  if (spinnerEl) {
+    spinnerEl.style.display = "block";
+    spinnerEl.textContent = "Creating QR...";
+  }
+  if (statusEl) {
+    statusEl.textContent = "Uploading for mobile QR...";
+  }
+  if (card) {
+    card.classList.add("visible");
+  }
+
+  const publicUrl = await uploadCaptureForQr(blob, filename);
+  if (publicUrl && mountEl) {
+    if (spinnerEl) spinnerEl.style.display = "none";
+    renderQrCodeToMount(publicUrl, mountEl);
+    if (statusEl) statusEl.textContent = "Scan QR to download";
   } else {
-    startVideoRecording();
+    // Fallback if offline: encode current page URL or prompt direct save
+    if (spinnerEl) spinnerEl.style.display = "none";
+    renderQrCodeToMount(window.location.href, mountEl);
+    if (statusEl) statusEl.textContent = "Use ↓ Save button below";
   }
 }
 
-function startVideoRecording() {
-  if (!mainCanvas.captureStream) {
-    showToast("Video recording is not supported in this browser");
-    return;
-  }
-  const stream = mainCanvas.captureStream(30);
-  recordedChunks = [];
-  const mimeTypes = [
-    "video/webm;codecs=vp9",
-    "video/webm;codecs=vp8",
-    "video/webm",
-    "video/mp4"
-  ];
-  let selectedMime = "";
-  for (const m of mimeTypes) {
-    if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) {
-      selectedMime = m;
-      break;
-    }
-  }
-  try {
-    mediaRecorder = selectedMime
-      ? new MediaRecorder(stream, { mimeType: selectedMime, videoBitsPerSecond: 6000000 })
-      : new MediaRecorder(stream);
-  } catch (e) {
-    showToast("Could not initialize video recorder");
-    return;
-  }
+async function startDelayedSnapshotPNG() {
+  if (!webcamActive || captureBusy) return;
+  captureBusy = true;
+  const snapBtn = document.getElementById("snapshotWebcamBtn");
+  if (snapBtn) snapBtn.classList.add("active");
 
-  mediaRecorder.ondataavailable = (ev) => {
-    if (ev.data && ev.data.size > 0) recordedChunks.push(ev.data);
-  };
+  await runThreeSecondCountdown("SNAPSHOT PNG IN");
+  triggerShutterFlash();
 
-  mediaRecorder.onstop = () => {
-    const ext = selectedMime.includes("mp4") ? "mp4" : "webm";
-    const blob = new Blob(recordedChunks, { type: selectedMime || "video/webm" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `thermal-live-${state.mode}-${Date.now()}.${ext}`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
-    showToast(`Saved thermal video recording (.${ext})!`);
-  };
+  mainCanvas.toBlob((blob) => {
+    captureBusy = false;
+    if (snapBtn) snapBtn.classList.remove("active");
+    if (!blob) return;
+    const filename = `thermal-${state.mode}-${Date.now()}.png`;
+    showToast("Captured PNG! Scan QR on bottom right or click Save.");
+    presentCaptureWithQR(blob, filename, "PNG SNAPSHOT");
+  }, "image/png");
+}
 
-  mediaRecorder.start();
-  isRecording = true;
+async function startDelayedGifRecording() {
+  if (!webcamActive || captureBusy) return;
+  captureBusy = true;
   const recBtn = document.getElementById("recordWebcamBtn");
-  recBtn.classList.add("recording");
-  recBtn.innerHTML = `<span>■</span><span class="dock-btn-text">Stop</span>`;
-  showToast("Recording live thermal video...");
+  if (recBtn) {
+    recBtn.classList.add("recording");
+    recBtn.innerHTML = `<span>●</span><span class="dock-btn-text">3s...</span>`;
+  }
+
+  // 1. 3-second countdown before GIF recording starts
+  await runThreeSecondCountdown("RECORD 3S GIF IN");
+
+  // 2. Record 3.0 seconds of frames into an animated GIF
+  const overlay = document.getElementById("captureCountdownOverlay");
+  const labelEl = document.getElementById("captureCountdownLabel");
+  const numEl = document.getElementById("captureCountdownNumber");
+  const progTrack = document.getElementById("captureProgressTrack");
+  const progBar = document.getElementById("captureProgressBar");
+
+  if (labelEl) labelEl.textContent = "● RECORDING GIF";
+  if (numEl) numEl.textContent = "3.0s";
+  if (progBar) progBar.style.width = "0%";
+  if (progTrack) progTrack.style.display = "block";
+  if (overlay) overlay.classList.add("visible");
+  if (recBtn) {
+    recBtn.innerHTML = `<span>■</span><span class="dock-btn-text">Rec...</span>`;
+  }
+
+  const aspect = (mainCanvas.width || 640) / (mainCanvas.height || 480);
+  const gifH = 300;
+  const gifW = Math.round((gifH * aspect) / 2) * 2;
+  const capC = document.createElement("canvas");
+  capC.width = gifW;
+  capC.height = gifH;
+  const capCtx = capC.getContext("2d", { willReadFrequently: true });
+
+  const totalDurationMs = 3000;
+  const fps = 10;
+  const totalFrames = 30;
+  const intervalMs = totalDurationMs / totalFrames;
+  const frames = [];
+  const startTime = performance.now();
+
+  await new Promise((resolve) => {
+    const timer = setInterval(() => {
+      const elapsed = performance.now() - startTime;
+      const remainSec = Math.max(0, (totalDurationMs - elapsed) / 1000);
+      const pct = Math.min(100, (elapsed / totalDurationMs) * 100);
+      if (numEl) numEl.textContent = `${remainSec.toFixed(1)}s`;
+      if (progBar) progBar.style.width = `${pct}%`;
+
+      capCtx.drawImage(mainCanvas, 0, 0, gifW, gifH);
+      frames.push(capCtx.getImageData(0, 0, gifW, gifH).data);
+
+      if (frames.length >= totalFrames || elapsed >= totalDurationMs) {
+        clearInterval(timer);
+        resolve();
+      }
+    }, intervalMs);
+  });
+
+  if (labelEl) labelEl.textContent = "ENCODING GIF...";
+  if (numEl) numEl.textContent = "⚡";
+  if (progTrack) progTrack.style.display = "none";
+
+  // Allow UI to paint before encoding GIF
+  await new Promise((r) => setTimeout(r, 25));
+
+  const gifBlob = encodeAnimatedGIF(frames, gifW, gifH, Math.round(100 / fps));
+
+  if (overlay) overlay.classList.remove("visible");
+  captureBusy = false;
+  isRecording = false;
+  if (recBtn) {
+    recBtn.classList.remove("recording");
+    recBtn.innerHTML = `<span>●</span><span class="dock-btn-text">Rec GIF</span>`;
+  }
+
+  const filename = `thermal-${state.mode}-${Date.now()}.gif`;
+  showToast("Captured 3s GIF! Scan QR on bottom right or click Save.");
+  presentCaptureWithQR(gifBlob, filename, "3S ANIMATED GIF");
 }
 
 function stopVideoRecording() {
-  if (mediaRecorder && mediaRecorder.state !== "inactive") {
-    mediaRecorder.stop();
-  }
   isRecording = false;
-  const recBtn = document.getElementById("recordWebcamBtn");
-  if (recBtn) {
-    recBtn.classList.remove("recording");
-    recBtn.innerHTML = `<span>●</span><span class="dock-btn-text">Rec</span>`;
-  }
 }
 
 function requestRender() {
@@ -1512,16 +1908,7 @@ function showToast(msg) {
   toast.textContent = msg;
   toast.classList.add("visible");
   clearTimeout(showToast._timer);
-  showToast._timer = setTimeout(() => toast.classList.remove("visible"), 2400);
-}
-
-function downloadCanvasPNG(canvas, filename) {
-  const link = document.createElement("a");
-  link.download = filename;
-  link.href = canvas.toDataURL("image/png");
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  showToast._timer = setTimeout(() => toast.classList.remove("visible"), 2600);
 }
 
 function toggleControlsPanel(forceCollapsed) {
@@ -1658,15 +2045,20 @@ function initControls() {
   });
 
   document.getElementById("snapshotWebcamBtn").addEventListener("click", () => {
-    if (!webcamActive) return;
-    downloadCanvasPNG(mainCanvas, `thermal-crt-${state.mode}-${Date.now()}.png`);
-    showToast("Saved thermal snapshot PNG!");
+    startDelayedSnapshotPNG();
   });
 
   document.getElementById("recordWebcamBtn").addEventListener("click", () => {
-    if (!webcamActive) return;
-    toggleVideoRecording();
+    startDelayedGifRecording();
   });
+
+  const closeQrBtn = document.getElementById("closeQrCardBtn");
+  if (closeQrBtn) {
+    closeQrBtn.addEventListener("click", () => {
+      const card = document.getElementById("captureQrCard");
+      if (card) card.classList.remove("visible");
+    });
+  }
 
   // Mode Cards (Options 1 - 4) in Bottom Dock
   document.querySelectorAll(".mode-card").forEach((card) => {
@@ -1674,11 +2066,7 @@ function initControls() {
       document.querySelectorAll(".mode-card").forEach((c) => c.classList.remove("active"));
       card.classList.add("active");
       state.mode = card.dataset.mode;
-
-      if (state.mode === "layered") {
-        state.showHud = true;
-        document.getElementById("showHud").checked = true;
-      }
+      state.showHud = state.mode === "layered";
       requestRender();
     });
   });

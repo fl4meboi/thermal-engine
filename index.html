@@ -24,6 +24,41 @@
         <!-- Minimalistic CRT Glass Curvature Vignette & Aperture Overlay -->
         <div class="crt-glass-overlay" aria-hidden="true"></div>
 
+        <!-- Shutter Flash Effect -->
+        <div id="captureFlashOverlay" class="capture-flash-overlay" aria-hidden="true"></div>
+
+        <!-- 3-Second Capture Countdown / Recording Status Overlay -->
+        <div id="captureCountdownOverlay" class="capture-countdown-overlay" aria-live="polite">
+          <div id="captureCountdownLabel" class="countdown-label">SNAPSHOT PNG IN</div>
+          <div id="captureCountdownNumber" class="countdown-number">3</div>
+          <div id="captureProgressTrack" class="capture-progress-track" style="display:none;">
+            <div id="captureProgressBar" class="capture-progress-bar"></div>
+          </div>
+        </div>
+
+        <!-- Bottom-Right QR Code & Download Card -->
+        <div id="captureQrCard" class="capture-qr-card" aria-label="Capture Download and QR Code">
+          <div class="qr-card-header">
+            <span id="qrCardTitle" class="qr-card-title">PNG CAPTURE</span>
+            <button type="button" id="closeQrCardBtn" class="qr-card-close" title="Dismiss">✕</button>
+          </div>
+          <div class="qr-card-body">
+            <div class="qr-preview-wrap">
+              <img id="qrPreviewImg" alt="Captured preview" />
+            </div>
+            <div class="qr-code-wrap" id="qrCodeWrap">
+              <div id="qrSpinner" class="qr-spinner">Generating QR...</div>
+              <div id="qrCanvasMount" class="qr-canvas-mount"></div>
+            </div>
+          </div>
+          <div class="qr-card-footer">
+            <span id="qrStatusText" class="qr-status-text">Scan QR with phone to save</span>
+            <a id="qrDownloadBtn" class="btn btn-primary btn-compact qr-download-btn" href="#" download="thermal-capture.png">
+              ↓ Save
+            </a>
+          </div>
+        </div>
+
         <!-- Webcam Permission / Error Overlay -->
         <div id="webcamPromptOverlay" class="webcam-overlay-prompt">
           <h3 id="webcamPromptTitle">Initializing Live Thermal Feed...</h3>
@@ -311,11 +346,6 @@
               </div>
               <input type="range" id="scanline" min="0" max="0.8" step="0.05" value="0.20" />
             </div>
-
-            <label class="checkbox-row">
-              <span>Show Thermal Telemetry HUD &amp; Scale</span>
-              <input type="checkbox" id="showHud" />
-            </label>
           </div>
 
           <!-- Camera & Stream Settings -->
@@ -404,14 +434,14 @@
               <span class="dock-btn-text">Freeze</span>
             </button>
 
-            <button id="snapshotWebcamBtn" class="btn btn-dock btn-primary" type="button" title="Save snapshot as PNG">
+            <button id="snapshotWebcamBtn" class="btn btn-dock btn-primary" type="button" title="3s countdown then capture PNG with QR code">
               <span>📸</span>
-              <span class="dock-btn-text">Snap</span>
+              <span class="dock-btn-text">Snap PNG</span>
             </button>
 
-            <button id="recordWebcamBtn" class="btn btn-dock btn-danger" type="button" title="Record thermal video clip">
+            <button id="recordWebcamBtn" class="btn btn-dock btn-danger" type="button" title="3s countdown then record 3s GIF with QR code">
               <span>●</span>
-              <span class="dock-btn-text">Rec</span>
+              <span class="dock-btn-text">Rec GIF</span>
             </button>
 
             <button id="holdOriginalBtn" class="btn btn-dock" type="button" title="Hold to compare raw camera input">
@@ -435,6 +465,7 @@
 
   <div id="statusToast" class="status-toast">Saved snapshot!</div>
 
-  <script src="app.js?v=20261016-crt"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
+  <script src="app.js?v=20261016-qr"></script>
 </body>
 </html>
