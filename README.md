@@ -12,6 +12,10 @@ Open `index.html` in a browser (webcam mode needs a secure context, so use `pyth
 
 `images-data.js` (a base64 bundle of the sample portraits) is gitignored. Without it the app still runs; use "Add Image" to load your own pictures.
 
+## Documentation
+
+Build record, decisions and handoff: [docs/thermal-studio-code-art-engine-walkthrough.md](docs/thermal-studio-code-art-engine-walkthrough.md)
+
 ## Layout
 
 - `index.html`, `app.js`, `styles.css`: the app
