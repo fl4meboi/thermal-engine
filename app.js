@@ -60,7 +60,7 @@ const PALETTES = {
 };
 
 const DEFAULT_STATE = {
-  sourceMode: "still",    // 'still' | 'webcam'
+  sourceMode: "webcam",   // 'webcam' | 'still'
   mode: "thermal",        // 'thermal' | 'topo' | 'generative' | 'layered'
   palette: "rainbow",
   hueShift: 0,
@@ -103,6 +103,11 @@ let webcamStream = null;
 let webcamActive = false;
 let webcamFrozen = false;
 let mirrorWebcam = true;
+let cameraFacing = "user"; // 'user' (Front) | 'environment' (Back)
+let cameraZoom = 1;        // 0.5 | 1 | 2 | 3
+let digitalCropZoom = 1;
+let activeLensType = "main"; // 'main' | 'ultrawide'
+let cameraLensMap = { frontId: "", backMainId: "", backUltraWideId: "" };
 let webcamTargetHeight = 640;
 let webcamRafId = null;
 let webcamCapCanvas = document.createElement("canvas");
@@ -793,24 +798,132 @@ async function populateCameraDevices() {
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
     const videoDevices = devices.filter((d) => d.kind === "videoinput");
-    const select = document.getElementById("cameraDeviceSelect");
-    const currentVal = select.value;
-    select.innerHTML = "";
-    videoDevices.forEach((d, idx) => {
-      const opt = document.createElement("option");
-      opt.value = d.deviceId;
-      opt.textContent = d.label || `Camera #${idx + 1}`;
-      select.appendChild(opt);
+
+    let frontId = "";
+    let backMainId = "";
+    let backUltraWideId = "";
+    const externalDevices = [];
+
+    videoDevices.forEach((d) => {
+      const lbl = (d.label || "").toLowerCase();
+      if (/front|user|facetime/i.test(lbl)) {
+        if (!frontId) frontId = d.deviceId;
+      } else if (/back|rear|environment/i.test(lbl)) {
+        if (/ultra\s*wide|0\.5/i.test(lbl)) {
+          if (!backUltraWideId) backUltraWideId = d.deviceId;
+        } else if (/triple|dual\s*wide|dual/i.test(lbl)) {
+          // Prefer virtual multi-camera on iOS as primary back camera
+          backMainId = d.deviceId;
+        } else if (!/telephoto|tele\b/i.test(lbl) && !backMainId) {
+          backMainId = d.deviceId;
+        }
+      } else if (d.deviceId) {
+        externalDevices.push(d);
+      }
     });
-    if (currentVal && Array.from(select.options).some((o) => o.value === currentVal)) {
-      select.value = currentVal;
+
+    cameraLensMap = { frontId, backMainId, backUltraWideId };
+
+    // Show .5x zoom button when on Back camera if ultra-wide lens or <1x hardware zoom is available
+    updateZoomUI();
+
+    // Populate merged camera selector (Front Camera, Back Camera, plus any desktop external cameras)
+    const select = document.getElementById("cameraDeviceSelect");
+    const desktopWrap = document.getElementById("desktopCamSelectWrap");
+    if (select) {
+      select.innerHTML = "";
+      const optFront = document.createElement("option");
+      optFront.value = "user";
+      optFront.textContent = "Front Camera";
+      select.appendChild(optFront);
+
+      if (backMainId || backUltraWideId || videoDevices.length > 1) {
+        const optBack = document.createElement("option");
+        optBack.value = "environment";
+        optBack.textContent = "Back Camera";
+        select.appendChild(optBack);
+      }
+
+      externalDevices.forEach((d, idx) => {
+        if (d.deviceId !== frontId && d.deviceId !== backMainId) {
+          const opt = document.createElement("option");
+          opt.value = d.deviceId;
+          opt.textContent = d.label || `Camera #${idx + 1}`;
+          select.appendChild(opt);
+        }
+      });
+
+      select.value = cameraFacing;
+      // Only show dropdown on desktop when multiple external cameras exist; mobile uses Flip button
+      if (desktopWrap) {
+        desktopWrap.style.display = externalDevices.length > 1 ? "flex" : "none";
+      }
     }
   } catch (err) {
     console.warn("Could not enumerate video devices:", err);
   }
 }
 
-async function startWebcam(deviceId = "") {
+function updateZoomUI() {
+  const ultraBtn = document.getElementById("zoomUltraWideBtn");
+  if (ultraBtn) {
+    let hasHardwareUltra = false;
+    if (webcamStream) {
+      const track = webcamStream.getVideoTracks()[0];
+      const caps = track && track.getCapabilities ? track.getCapabilities() : null;
+      if (caps && caps.zoom && caps.zoom.min < 0.9) hasHardwareUltra = true;
+    }
+    const showUltra = cameraFacing === "environment" && Boolean(cameraLensMap.backUltraWideId || hasHardwareUltra);
+    ultraBtn.style.display = showUltra ? "inline-block" : "none";
+  }
+
+  document.querySelectorAll("#cameraZoomGroup .zoom-pill").forEach((btn) => {
+    const z = parseFloat(btn.dataset.zoom);
+    btn.classList.toggle("active", Math.abs(z - cameraZoom) < 0.05);
+  });
+}
+
+async function applyTrackOrDigitalZoom(zoomLevel) {
+  cameraZoom = zoomLevel;
+  updateZoomUI();
+
+  if (cameraFacing === "environment" && cameraLensMap.backUltraWideId) {
+    const wantUltraLens = zoomLevel < 1;
+    const targetLensType = wantUltraLens ? "ultrawide" : "main";
+    if (webcamActive && activeLensType !== targetLensType) {
+      await startWebcam("environment");
+      return;
+    }
+  }
+
+  let handledByHardware = false;
+  if (webcamStream) {
+    const track = webcamStream.getVideoTracks()[0];
+    if (track && track.getCapabilities && track.applyConstraints) {
+      try {
+        const caps = track.getCapabilities();
+        if (caps && caps.zoom && zoomLevel >= caps.zoom.min && zoomLevel <= caps.zoom.max) {
+          await track.applyConstraints({ advanced: [{ zoom: zoomLevel }] });
+          handledByHardware = true;
+        }
+      } catch (e) {
+        handledByHardware = false;
+      }
+    }
+  }
+
+  if (handledByHardware || zoomLevel <= 1) {
+    digitalCropZoom = 1;
+  } else {
+    digitalCropZoom = zoomLevel;
+  }
+
+  if (webcamFrozen && webcamActive) {
+    renderWebcamFrame();
+  }
+}
+
+async function startWebcam(targetModeOrId = "") {
   const overlay = document.getElementById("webcamPromptOverlay");
   const titleEl = document.getElementById("webcamPromptTitle");
   const descEl = document.getElementById("webcamPromptDesc");
@@ -823,22 +936,44 @@ async function startWebcam(deviceId = "") {
 
   stopWebcamStreamOnly();
 
+  if (targetModeOrId === "user" || targetModeOrId === "environment") {
+    cameraFacing = targetModeOrId;
+  }
+
   try {
-    const constraints = {
-      video: {
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-        frameRate: { ideal: 60 }
-      },
-      audio: false
+    const videoConstraints = {
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+      frameRate: { ideal: 60 }
     };
-    if (deviceId) {
-      constraints.video.deviceId = { exact: deviceId };
+
+    if (targetModeOrId && targetModeOrId !== "user" && targetModeOrId !== "environment") {
+      videoConstraints.deviceId = { exact: targetModeOrId };
+      activeLensType = "main";
+    } else if (cameraFacing === "environment") {
+      if (cameraZoom < 1 && cameraLensMap.backUltraWideId) {
+        videoConstraints.deviceId = { exact: cameraLensMap.backUltraWideId };
+        activeLensType = "ultrawide";
+      } else if (cameraLensMap.backMainId) {
+        videoConstraints.deviceId = { exact: cameraLensMap.backMainId };
+        activeLensType = "main";
+      } else {
+        videoConstraints.facingMode = { ideal: "environment" };
+        activeLensType = "main";
+      }
     } else {
-      constraints.video.facingMode = "user";
+      if (cameraLensMap.frontId) {
+        videoConstraints.deviceId = { exact: cameraLensMap.frontId };
+      } else {
+        videoConstraints.facingMode = "user";
+      }
+      activeLensType = "main";
     }
 
-    webcamStream = await navigator.mediaDevices.getUserMedia(constraints);
+    webcamStream = await navigator.mediaDevices.getUserMedia({
+      video: videoConstraints,
+      audio: false
+    });
     videoEl.srcObject = webcamStream;
     await videoEl.play();
 
@@ -847,7 +982,30 @@ async function startWebcam(deviceId = "") {
     updateFreezeBtnUI();
     overlay.classList.remove("visible");
 
+    // Detect whether active camera is a back/rear camera and auto-set mirrorWebcam
+    const track = webcamStream.getVideoTracks()[0];
+    const settings = (track && track.getSettings) ? track.getSettings() : {};
+    const trackLabel = (track && track.label) ? track.label : "";
+    const isBackCamera =
+      cameraFacing === "environment" ||
+      settings.facingMode === "environment" ||
+      /back|rear|environment/i.test(trackLabel);
+
+    cameraFacing = isBackCamera ? "environment" : "user";
+    // Back cameras should NOT be mirrored; front selfie camera SHOULD be mirrored
+    mirrorWebcam = !isBackCamera;
+    const mirrorCheckbox = document.getElementById("mirrorWebcam");
+    if (mirrorCheckbox) {
+      mirrorCheckbox.checked = mirrorWebcam;
+    }
+
+    const flipLabel = document.getElementById("flipCameraLabel");
+    if (flipLabel) {
+      flipLabel.textContent = isBackCamera ? "Back Cam" : "Front Cam";
+    }
+
     await populateCameraDevices();
+    await applyTrackOrDigitalZoom(cameraZoom);
     startWebcamLoop();
   } catch (err) {
     console.error("Webcam access error:", err);
@@ -918,7 +1076,12 @@ function renderWebcamFrame() {
       webcamCapCtx.translate(targetW, 0);
       webcamCapCtx.scale(-1, 1);
     }
-    webcamCapCtx.drawImage(videoEl, 0, 0, targetW, targetH);
+    const crop = digitalCropZoom > 1 ? digitalCropZoom : 1;
+    const sw = videoEl.videoWidth / crop;
+    const sh = videoEl.videoHeight / crop;
+    const sx = (videoEl.videoWidth - sw) * 0.5;
+    const sy = (videoEl.videoHeight - sh) * 0.5;
+    webcamCapCtx.drawImage(videoEl, sx, sy, sw, sh, 0, 0, targetW, targetH);
     webcamCapCtx.restore();
   }
 
@@ -975,7 +1138,7 @@ function renderWebcamFrame() {
   }
 }
 
-// Switch between 1. Still Image Mode and 2. Real-Time Webcam Mode
+// Switch between 1. Real-Time Webcam Mode and 2. Still Image Mode
 function setSourceMode(newSourceMode) {
   if (state.sourceMode === newSourceMode) return;
   state.sourceMode = newSourceMode;
@@ -993,8 +1156,7 @@ function setSourceMode(newSourceMode) {
 
   if (newSourceMode === "webcam") {
     if (isGridView) toggleGridView(false);
-    const selectedDevice = document.getElementById("cameraDeviceSelect").value;
-    startWebcam(selectedDevice);
+    startWebcam(cameraFacing);
   } else {
     stopWebcamStreamOnly();
     document.getElementById("webcamPromptOverlay").classList.remove("visible");
@@ -1228,6 +1390,9 @@ function toggleControlsPanel(forceCollapsed) {
   if (toggleBtn) {
     toggleBtn.classList.toggle("active", !isCollapsed);
     toggleBtn.setAttribute("aria-expanded", String(!isCollapsed));
+    toggleBtn.innerHTML = isCollapsed
+      ? `<span>▴</span><span class="label-full">Show Controls</span><span class="label-short">Show Tune</span>`
+      : `<span>⚙</span><span class="label-full">Controls</span><span class="label-short">Tune</span>`;
   }
   requestAnimationFrame(() => {
     fitMainCanvasToStage();
@@ -1242,11 +1407,10 @@ function initControls() {
   document.getElementById("sourceWebcamBtn").addEventListener("click", () => setSourceMode("webcam"));
 
   document.getElementById("retryWebcamBtn").addEventListener("click", () => {
-    const selectedDevice = document.getElementById("cameraDeviceSelect").value;
-    startWebcam(selectedDevice);
+    startWebcam(cameraFacing);
   });
 
-  // Controls Panel Toggle (Header & Mobile Handle)
+  // Controls Panel Toggle (Header, Mobile Hide Handle, and Persistent Bottom Show Bar)
   const toggleControlsBtn = document.getElementById("toggleControlsBtn");
   if (toggleControlsBtn) {
     toggleControlsBtn.addEventListener("click", () => toggleControlsPanel());
@@ -1254,6 +1418,28 @@ function initControls() {
   const collapseMobileBtn = document.getElementById("collapseSidebarMobileBtn");
   if (collapseMobileBtn) {
     collapseMobileBtn.addEventListener("click", () => toggleControlsPanel(true));
+  }
+  const showControlsBottomBar = document.getElementById("showControlsBottomBar");
+  if (showControlsBottomBar) {
+    showControlsBottomBar.addEventListener("click", () => toggleControlsPanel(false));
+  }
+
+  // Mobile Control Category Filter Tabs (All | Palette | Field | Style | Optics)
+  const mobileSectionTabs = document.getElementById("mobileSectionTabs");
+  if (mobileSectionTabs) {
+    mobileSectionTabs.querySelectorAll(".sec-tab").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        mobileSectionTabs.querySelectorAll(".sec-tab").forEach((t) => t.classList.remove("active"));
+        tab.classList.add("active");
+        const targetSec = tab.dataset.sec;
+        document.querySelectorAll("#controlsSidebar .control-section").forEach((sec) => {
+          const match = targetSec === "all" || sec.dataset.section === targetSec;
+          sec.classList.toggle("mobile-filtered-out", !match);
+        });
+        const sidebar = document.getElementById("controlsSidebar");
+        if (sidebar) sidebar.scrollTop = 0;
+      });
+    });
   }
 
   // Observe stage resize to keep canvas fitted in any aspect ratio or orientation
@@ -1266,6 +1452,26 @@ function initControls() {
   }
   window.addEventListener("resize", () => {
     fitMainCanvasToStage();
+  });
+
+  // Webcam Flip Camera button (Front <-> Back)
+  const flipCameraBtn = document.getElementById("flipCameraBtn");
+  if (flipCameraBtn) {
+    flipCameraBtn.addEventListener("click", () => {
+      const nextFacing = cameraFacing === "user" ? "environment" : "user";
+      if (nextFacing === "user" && cameraZoom < 1) {
+        cameraZoom = 1;
+      }
+      startWebcam(nextFacing);
+    });
+  }
+
+  // Webcam Zoom Pills (.5x | 1x | 2x | 3x)
+  document.querySelectorAll("#cameraZoomGroup .zoom-pill").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const z = parseFloat(btn.dataset.zoom) || 1;
+      applyTrackOrDigitalZoom(z);
+    });
   });
 
   // Webcam bottom bar controls
@@ -1282,6 +1488,9 @@ function initControls() {
 
   document.getElementById("mirrorWebcam").addEventListener("change", (e) => {
     mirrorWebcam = e.target.checked;
+    if (webcamFrozen && webcamActive) {
+      renderWebcamFrame();
+    }
   });
 
   // Webcam Header Actions
@@ -1579,6 +1788,9 @@ function init() {
     window.PORTRAIT_IMAGES.forEach((item) => addImageEntry(item, false));
   }
   updateStillEmptyState();
+  if (state.sourceMode === "webcam") {
+    startWebcam(cameraFacing);
+  }
 }
 
 init();
