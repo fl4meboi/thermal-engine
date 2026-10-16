@@ -4,13 +4,17 @@ THERMAL STUDIO: a code-art engine that redraws portraits (still mode) and live w
 
 ## Try it
 
-Live: https://fl4meboi.github.io/thermal-engine/ (images you add stay in your browser; nothing is uploaded).
+Live: https://fl4meboi.github.io/thermal-engine/ (images you add and the live camera stay in your browser). Exception: Snapshot PNG and 3-second GIF capture upload the file to a temporary public host (tmpfiles.org, uguu.se or catbox) so a phone can scan the QR code to download it.
 
 ## Run locally
 
 Open `index.html` in a browser (webcam mode needs a secure context, so use `python3 -m http.server` and visit `http://localhost:8000`).
 
 `images-data.js` (a base64 bundle of the sample portraits) is gitignored. Without it the app still runs; use "Add Image" to load your own pictures.
+
+## Documentation
+
+Build record, decisions and handoff: [docs/thermal-studio-code-art-engine-walkthrough.md](docs/thermal-studio-code-art-engine-walkthrough.md)
 
 ## Layout
 
