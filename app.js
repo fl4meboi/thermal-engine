@@ -1,16 +1,6 @@
-// THERMAL STUDIO - Code-Art Portrait & Real-Time Webcam Stylizer Engine
+// LIVE IR // Interactive Crowd Thermal Monitor Engine
 
 const PALETTES = {
-  rainbow: [
-    { pos: 0.00, color: [5, 7, 22] },      // Deep midnight blue-black
-    { pos: 0.14, color: [12, 44, 138] },   // Royal indigo blue
-    { pos: 0.30, color: [0, 128, 255] },   // Electric cobalt blue
-    { pos: 0.45, color: [0, 220, 220] },   // Glowing cyan
-    { pos: 0.60, color: [34, 229, 92] },   // Spectral emerald green
-    { pos: 0.76, color: [255, 230, 0] },   // Solar yellow
-    { pos: 0.90, color: [255, 75, 0] },    // Fiery orange-red
-    { pos: 1.00, color: [235, 10, 40] }    // Deep thermal crimson-red
-  ],
   rainbow_hot: [
     { pos: 0.00, color: [4, 6, 20] },
     { pos: 0.13, color: [14, 48, 150] },
@@ -21,6 +11,16 @@ const PALETTES = {
     { pos: 0.86, color: [255, 60, 0] },
     { pos: 0.94, color: [230, 0, 45] },
     { pos: 1.00, color: [255, 242, 245] }
+  ],
+  rainbow: [
+    { pos: 0.00, color: [5, 7, 22] },      // Deep midnight blue-black
+    { pos: 0.14, color: [12, 44, 138] },   // Royal indigo blue
+    { pos: 0.30, color: [0, 128, 255] },   // Electric cobalt blue
+    { pos: 0.45, color: [0, 220, 220] },   // Glowing cyan
+    { pos: 0.60, color: [34, 229, 92] },   // Spectral emerald green
+    { pos: 0.76, color: [255, 230, 0] },   // Solar yellow
+    { pos: 0.90, color: [255, 75, 0] },    // Fiery orange-red
+    { pos: 1.00, color: [235, 10, 40] }    // Deep thermal crimson-red
   ],
   predator: [
     { pos: 0.00, color: [2, 5, 18] },
@@ -60,9 +60,8 @@ const PALETTES = {
 };
 
 const DEFAULT_STATE = {
-  sourceMode: "webcam",   // 'webcam' | 'still'
   mode: "thermal",        // 'thermal' | 'topo' | 'generative' | 'layered'
-  palette: "rainbow",
+  palette: "rainbow_hot",
   hueShift: 0,
   posterize: 0,
   invertThermal: false,
@@ -72,6 +71,11 @@ const DEFAULT_STATE = {
   exposure: 0.0,
   detailBoost: 0.35,
   autoNormalize: true,
+  // Crowd Heat Interaction
+  crowdHeatEnabled: true,
+  crowdOverride: "auto",  // 'auto' | 0 | 1 | 2 | 3 | 4
+  crowdMaxPeople: 3,
+  crowdIntensity: 1.0,
   // Topo
   topoStyle: "overlay",   // 'overlay' | 'wireframe' | 'plateau' | 'ink'
   contourCount: 18,
@@ -86,14 +90,11 @@ const DEFAULT_STATE = {
   bloom: 0.45,
   chroma: 2.0,
   grain: 0.08,
-  scanline: 0.15,
+  scanline: 0.20,
   showHud: false
 };
 
 let state = { ...DEFAULT_STATE };
-let imagesList = [];
-let activeIndex = 0;
-let isGridView = false;
 let isHoldingOriginal = false;
 let lut = new Uint8ClampedArray(1024 * 3);
 
@@ -116,6 +117,20 @@ let webcamRawBuffer = null;
 let webcamHist = new Uint32Array(1000);
 let smoothTelemetry = { maxX: 320, maxY: 240, maxVal: 0.9, minX: 100, minY: 100, minVal: 0.1, initialized: false };
 
+// ==========================================
+// CROWD / PEOPLE DETECTION & HEAT STATE
+// ==========================================
+let detectedPeopleCount = 0;
+let detectedPeopleBoxes = []; // Normalized { cx, cy, rx, ry, score }
+let smoothCrowdCount = 0;
+let smoothAmbientTempC = 18.4;
+let mpFaceDetector = null;
+let mpObjectDetector = null;
+let nativeFaceDetector = null;
+let detectorReadyType = "heuristic"; // 'mediapipe' | 'native' | 'heuristic'
+let lastDetectionTimestamp = 0;
+let detectionBusy = false;
+
 // FPS tracking
 let fpsFrameCount = 0;
 let fpsLastTime = performance.now();
@@ -132,6 +147,308 @@ const offCanvas = document.createElement("canvas");
 const offCtx = offCanvas.getContext("2d", { willReadFrequently: true });
 const bloomCanvas = document.createElement("canvas");
 const bloomCtx = bloomCanvas.getContext("2d");
+
+// Initialize AI People / Face Detectors (MediaPipe Vision + Native FaceDetector + Heuristic Fallback)
+async function initPeopleDetectors() {
+  if ("FaceDetector" in window) {
+    try {
+      nativeFaceDetector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 10 });
+      detectorReadyType = "native";
+    } catch (e) {
+      nativeFaceDetector = null;
+    }
+  }
+
+  try {
+    const visionModule = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs");
+    const { FaceDetector, ObjectDetector, FilesetResolver } = visionModule;
+    const vision = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+    );
+
+    // Load lightweight multi-face detector
+    mpFaceDetector = await FaceDetector.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath:
+          "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+        delegate: "GPU"
+      },
+      runningMode: "VIDEO",
+      minDetectionConfidence: 0.38
+    });
+
+    // Also load lightweight person object detector so bodies at a distance or turned profiles count too
+    try {
+      mpObjectDetector = await ObjectDetector.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath:
+            "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/int8/1/efficientdet_lite0.tflite",
+          delegate: "GPU"
+        },
+        runningMode: "VIDEO",
+        scoreThreshold: 0.38,
+        categoryAllowlist: ["person"]
+      });
+    } catch (objErr) {
+      // Face detector alone is already active if object detector fails
+      mpObjectDetector = null;
+    }
+
+    detectorReadyType = "mediapipe";
+  } catch (err) {
+    console.warn("MediaPipe CDN unavailable, using fallback detector:", err);
+  }
+}
+
+// Fast skin/presence blob heuristic fallback when offline or before WASM finishes loading
+function detectPeopleHeuristic(imgData, w, h) {
+  const gridW = 24;
+  const gridH = 18;
+  const cellSkin = new Float32Array(gridW * gridH);
+  const data = imgData.data;
+  const stepX = Math.max(2, Math.floor(w / (gridW * 3)));
+  const stepY = Math.max(2, Math.floor(h / (gridH * 3)));
+
+  for (let gy = 0; gy < gridH; gy++) {
+    const y0 = Math.floor((gy * h) / gridH);
+    const y1 = Math.floor(((gy + 1) * h) / gridH);
+    for (let gx = 0; gx < gridW; gx++) {
+      const x0 = Math.floor((gx * w) / gridW);
+      const x1 = Math.floor(((gx + 1) * w) / gridW);
+      let hits = 0;
+      let samples = 0;
+      for (let y = y0; y < y1; y += stepY) {
+        for (let x = x0; x < x1; x += stepX) {
+          const p = (y * w + x) * 4;
+          const r = data[p];
+          const g = data[p + 1];
+          const b = data[p + 2];
+          samples++;
+          // Broad skin / warm foreground chromaticity check
+          const maxC = Math.max(r, g, b);
+          const minC = Math.min(r, g, b);
+          if (
+            r > 65 &&
+            g > 35 &&
+            b > 20 &&
+            r > g &&
+            r > b &&
+            r - Math.min(g, b) > 12 &&
+            maxC - minC > 15 &&
+            r < 250
+          ) {
+            hits++;
+          }
+        }
+      }
+      cellSkin[gy * gridW + gx] = samples > 0 ? hits / samples : 0;
+    }
+  }
+
+  // Connected components on grid cells
+  const visited = new Uint8Array(gridW * gridH);
+  const blobs = [];
+  for (let i = 0; i < cellSkin.length; i++) {
+    if (visited[i] || cellSkin[i] < 0.28) continue;
+    const queue = [i];
+    visited[i] = 1;
+    let sumX = 0;
+    let sumY = 0;
+    let count = 0;
+    let minGX = gridW, maxGX = 0, minGY = gridH, maxGY = 0;
+
+    while (queue.length > 0) {
+      const curr = queue.pop();
+      const cx = curr % gridW;
+      const cy = (curr - cx) / gridW;
+      sumX += cx + 0.5;
+      sumY += cy + 0.5;
+      count++;
+      if (cx < minGX) minGX = cx;
+      if (cx > maxGX) maxGX = cx;
+      if (cy < minGY) minGY = cy;
+      if (cy > maxGY) maxGY = cy;
+
+      const neighbors = [
+        cy > 0 ? (cy - 1) * gridW + cx : -1,
+        cy < gridH - 1 ? (cy + 1) * gridW + cx : -1,
+        cx > 0 ? cy * gridW + (cx - 1) : -1,
+        cx < gridW - 1 ? cy * gridW + (cx + 1) : -1
+      ];
+      for (const nb of neighbors) {
+        if (nb >= 0 && !visited[nb] && cellSkin[nb] >= 0.22) {
+          visited[nb] = 1;
+          queue.push(nb);
+        }
+      }
+    }
+
+    if (count >= 3) {
+      blobs.push({
+        cx: (sumX / count) / gridW,
+        cy: (sumY / count) / gridH,
+        rx: Math.max(0.12, ((maxGX - minGX + 1) / gridW) * 0.75),
+        ry: Math.max(0.16, ((maxGY - minGY + 1) / gridH) * 0.85),
+        cells: count
+      });
+    }
+  }
+
+  blobs.sort((a, b) => b.cells - a.cells);
+  return blobs.slice(0, 6);
+}
+
+// Run periodic people detection (~10 times per second) on webcamCapCanvas / videoEl
+function updatePeopleDetection(nowMs, imgData, w, h) {
+  if (state.crowdOverride !== "auto") {
+    const manualCount = parseInt(state.crowdOverride, 10) || 0;
+    detectedPeopleCount = manualCount;
+    detectedPeopleBoxes = [];
+    for (let k = 0; k < manualCount; k++) {
+      const spread = manualCount === 1 ? 0.5 : (k + 1) / (manualCount + 1);
+      detectedPeopleBoxes.push({
+        cx: spread,
+        cy: 0.48,
+        rx: 0.22,
+        ry: 0.34
+      });
+    }
+    return;
+  }
+
+  if (nowMs - lastDetectionTimestamp < 95 || detectionBusy) return;
+  lastDetectionTimestamp = nowMs;
+
+  if (detectorReadyType === "mediapipe" && mpFaceDetector) {
+    try {
+      const ts = Math.round(performance.now());
+      const faceRes = mpFaceDetector.detectForVideo(webcamCapCanvas, ts);
+      const faceBoxes = (faceRes && faceRes.detections ? faceRes.detections : []).map((d) => {
+        const bb = d.boundingBox;
+        return {
+          cx: (bb.originX + bb.width * 0.5) / w,
+          cy: (bb.originY + bb.height * 0.5) / h,
+          rx: Math.max(0.14, (bb.width / w) * 0.95),
+          ry: Math.max(0.22, (bb.height / h) * 1.25)
+        };
+      });
+
+      let personBoxes = [];
+      if (mpObjectDetector) {
+        const objRes = mpObjectDetector.detectForVideo(webcamCapCanvas, ts + 1);
+        personBoxes = (objRes && objRes.detections ? objRes.detections : []).map((d) => {
+          const bb = d.boundingBox;
+          return {
+            cx: (bb.originX + bb.width * 0.5) / w,
+            cy: (bb.originY + bb.height * 0.5) / h,
+            rx: Math.max(0.15, (bb.width / w) * 0.55),
+            ry: Math.max(0.22, (bb.height / h) * 0.55)
+          };
+        });
+      }
+
+      // Merge face detections and person body detections without double-counting the same person
+      const merged = [...faceBoxes];
+      for (const pb of personBoxes) {
+        const isDuplicate = merged.some((fb) => {
+          const dx = Math.abs(fb.cx - pb.cx);
+          const dy = Math.abs(fb.cy - pb.cy);
+          return dx < Math.max(fb.rx, pb.rx) * 0.85 && dy < Math.max(fb.ry, pb.ry) * 1.1;
+        });
+        if (!isDuplicate) {
+          merged.push(pb);
+        }
+      }
+
+      detectedPeopleCount = merged.length;
+      detectedPeopleBoxes = merged;
+      return;
+    } catch (e) {
+      // Fall through to native or heuristic if a frame timestamp collides
+    }
+  }
+
+  if (nativeFaceDetector) {
+    detectionBusy = true;
+    nativeFaceDetector
+      .detect(webcamCapCanvas)
+      .then((faces) => {
+        detectedPeopleCount = faces.length;
+        detectedPeopleBoxes = faces.map((f) => {
+          const bb = f.boundingBox;
+          return {
+            cx: (bb.x + bb.width * 0.5) / w,
+            cy: (bb.y + bb.height * 0.5) / h,
+            rx: Math.max(0.14, (bb.width / w) * 0.95),
+            ry: Math.max(0.22, (bb.height / h) * 1.25)
+          };
+        });
+        detectionBusy = false;
+      })
+      .catch(() => {
+        detectionBusy = false;
+      });
+    return;
+  }
+
+  const blobs = detectPeopleHeuristic(imgData, w, h);
+  detectedPeopleCount = blobs.length;
+  detectedPeopleBoxes = blobs;
+}
+
+// Smoothly step crowd count and update UI badges
+function stepCrowdThermalState() {
+  const targetCount = state.crowdHeatEnabled ? detectedPeopleCount : 1;
+  // Smooth transition so entering/leaving people shifts temperature organically
+  const alpha = 0.08;
+  smoothCrowdCount += (targetCount - smoothCrowdCount) * alpha;
+  if (Math.abs(smoothCrowdCount - targetCount) < 0.01) {
+    smoothCrowdCount = targetCount;
+  }
+
+  const maxPpl = Math.max(1, state.crowdMaxPeople);
+  const normCrowd = Math.min(1.35, (smoothCrowdCount / maxPpl) * state.crowdIntensity);
+
+  // Compute simulated core °C based on crowd count:
+  // 0 people -> ~18.4°C (Cold), 1 person -> ~31.2°C (Mild), 2 people -> ~36.8°C (Warm), 3+ people -> ~41.5°C+ (Hot)
+  const targetTempC = 18.4 + Math.min(1.3, normCrowd) * 18.8;
+  smoothAmbientTempC += (targetTempC - smoothAmbientTempC) * 0.1;
+
+  updateCrowdUI(Math.round(targetCount), normCrowd, smoothAmbientTempC);
+  return normCrowd;
+}
+
+function updateCrowdUI(displayCount, normCrowd, tempC) {
+  const pill = document.getElementById("crowdTempPill");
+  const countText = document.getElementById("crowdCountText");
+  const tempVal = document.getElementById("crowdTempValue");
+  const drawerStatus = document.getElementById("drawerCrowdStatus");
+
+  const pplLabel = displayCount === 1 ? "1 PERSON" : `${displayCount} PPL`;
+  if (countText) countText.textContent = pplLabel;
+  if (tempVal) tempVal.textContent = `${tempC.toFixed(1)}°C`;
+
+  let tierClass = "state-cold";
+  let tierName = "Ice Cold";
+  if (displayCount >= 3 || normCrowd >= 0.88) {
+    tierClass = "state-hot";
+    tierName = "Blazing Hot";
+  } else if (displayCount === 2 || normCrowd >= 0.52) {
+    tierClass = "state-warm";
+    tierName = "Warm";
+  } else if (displayCount === 1 || normCrowd >= 0.18) {
+    tierClass = "state-mild";
+    tierName = "Cool / Mild";
+  }
+
+  if (pill) {
+    pill.className = `crowd-temp-pill ${tierClass}`;
+  }
+  if (drawerStatus) {
+    const noun = displayCount === 1 ? "Person" : "People";
+    drawerStatus.textContent = `${displayCount} ${noun} • ${tierName} (${tempC.toFixed(1)}°C)`;
+  }
+}
 
 // RGB <-> HSL helper for Hue Shift
 function shiftHueRGB(r, g, b, deg) {
@@ -158,7 +475,7 @@ function shiftHueRGB(r, g, b, deg) {
 }
 
 function buildLUT() {
-  const stops = PALETTES[state.palette] || PALETTES.rainbow;
+  const stops = PALETTES[state.palette] || PALETTES.rainbow_hot;
   const n = 1024;
   for (let i = 0; i < n; i++) {
     let t = i / (n - 1);
@@ -258,33 +575,6 @@ function blurFloatField(src, width, height, radius) {
   return output;
 }
 
-// Precompute raw luminance for a still image once loaded
-function extractRawLuminance(imgEl) {
-  const w = imgEl.naturalWidth || imgEl.width;
-  const h = imgEl.naturalHeight || imgEl.height;
-  const c = document.createElement("canvas");
-  c.width = w;
-  c.height = h;
-  const ctx = c.getContext("2d");
-  ctx.drawImage(imgEl, 0, 0);
-  const data = ctx.getImageData(0, 0, w, h).data;
-  const raw = new Float32Array(w * h);
-
-  const hist = new Uint32Array(1000);
-  for (let i = 0, p = 0; i < raw.length; i++, p += 4) {
-    const r = data[p] / 255;
-    const g = data[p + 1] / 255;
-    const b = data[p + 2] / 255;
-    const lum = 0.38 * r + 0.48 * g + 0.14 * b;
-    raw[i] = lum;
-    const bin = Math.min(999, Math.max(0, Math.floor(lum * 999)));
-    hist[bin]++;
-  }
-
-  const { minP, maxP } = computeHistogramPercentiles(hist, w * h);
-  return { width: w, height: h, raw, minP, maxP };
-}
-
 function computeHistogramPercentiles(hist, total) {
   let sum = 0;
   let minP = 0.02;
@@ -311,10 +601,9 @@ function computeHistogramPercentiles(hist, total) {
   return { minP, maxP };
 }
 
-// Compute calibrated thermal field [0, 1] + hotspot/coldspot telemetry from cache object { width, height, raw, minP, maxP }
-function computeThermalFieldFromCache(cacheObj, isLiveVideo = false) {
+// Compute calibrated thermal field [0, 1] + crowd temperature modulation
+function computeThermalFieldFromCache(cacheObj, normCrowd = 0.35) {
   const { width, height, raw, minP, maxP } = cacheObj;
-  // Scale smoothing slightly relative to resolution so webcam & still look identical
   const resScale = width / 928;
   const effSmoothing = state.smoothing * resScale;
   const smoothed = blurFloatField(raw, width, height, effSmoothing);
@@ -324,7 +613,28 @@ function computeThermalFieldFromCache(cacheObj, isLiveVideo = false) {
 
   const field = new Float32Array(width * height);
   const span = Math.max(0.05, maxP - minP);
-  const invGamma = 1 / Math.max(0.1, state.gamma);
+
+  // Crowd Heat Mapping:
+  // When crowdHeatEnabled is true:
+  //   0 people (normCrowd = 0.0) -> [heatFloor = 0.00, heatCeil = 0.35] (Ice Cold Blues/Cyans)
+  //   1 person (normCrowd ~ 0.33)-> [heatFloor = 0.03, heatCeil = 0.65] (Cool Blues -> Emerald/Cyan)
+  //   2 people (normCrowd ~ 0.67)-> [heatFloor = 0.11, heatCeil = 0.87] (Warm Green -> Yellow/Orange)
+  //   3+ people(normCrowd >= 1.0)-> [heatFloor = 0.22, heatCeil = 1.08] (Blazing Red -> White-Hot Core)
+  let heatFloor = 0.0;
+  let heatCeil = 1.0;
+  let crowdGammaBoost = 1.0;
+
+  if (state.crowdHeatEnabled) {
+    const c = Math.max(0, normCrowd);
+    heatFloor = Math.min(0.32, Math.pow(c, 1.35) * 0.22);
+    heatCeil = Math.min(1.12, 0.34 + c * 0.68);
+    // Boost gamma warmth as more people enter
+    crowdGammaBoost = 0.72 + c * 0.52;
+  }
+
+  const invGamma = 1 / Math.max(0.1, state.gamma * crowdGammaBoost);
+  const hasBoxes = state.crowdHeatEnabled && detectedPeopleBoxes.length > 0;
+  const plumeStrength = Math.min(0.24, 0.06 + normCrowd * 0.12);
 
   let maxVal = -1;
   let minVal = 2;
@@ -344,13 +654,39 @@ function computeThermalFieldFromCache(cacheObj, isLiveVideo = false) {
     v = (v - 0.5) * state.contrast + 0.5 + state.exposure;
     v = Math.min(1, Math.max(0, v));
     v = Math.pow(v, invGamma);
+
+    const x = i % width;
+    const y = (i - x) / width;
+
+    // Map into crowd-modulated thermal window [heatFloor, heatCeil]
+    if (state.crowdHeatEnabled) {
+      v = heatFloor + v * (heatCeil - heatFloor);
+
+      // Add subtle localized thermal plume around each detected person
+      if (hasBoxes) {
+        const nx = x / width;
+        const ny = y / height;
+        let maxPlume = 0;
+        for (let b = 0; b < detectedPeopleBoxes.length; b++) {
+          const box = detectedPeopleBoxes[b];
+          const dx = (nx - box.cx) / box.rx;
+          const dy = (ny - box.cy) / box.ry;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < 1.0) {
+            const falloff = (1.0 - d2) * (1.0 - d2);
+            if (falloff > maxPlume) maxPlume = falloff;
+          }
+        }
+        v += maxPlume * plumeStrength * (0.4 + 0.6 * smoothed[i]);
+      }
+      v = Math.min(1, Math.max(0, v));
+    }
+
     if (state.invertThermal) {
       v = 1 - v;
     }
     field[i] = v;
 
-    const x = i % width;
-    const y = (i - x) / width;
     if (x > width * 0.08 && x < width * 0.92 && y > height * 0.08 && y < height * 0.92) {
       if (v > maxVal) {
         maxVal = v;
@@ -365,36 +701,32 @@ function computeThermalFieldFromCache(cacheObj, isLiveVideo = false) {
     }
   }
 
-  // Smooth telemetry coordinates in live webcam mode so HUD crosshairs glide smoothly
-  if (isLiveVideo) {
-    if (!smoothTelemetry.initialized) {
-      smoothTelemetry = { maxX, maxY, maxVal, minX, minY, minVal, initialized: true };
-    } else {
-      const alpha = 0.18;
-      smoothTelemetry.maxX = Math.round(smoothTelemetry.maxX + (maxX - smoothTelemetry.maxX) * alpha);
-      smoothTelemetry.maxY = Math.round(smoothTelemetry.maxY + (maxY - smoothTelemetry.maxY) * alpha);
-      smoothTelemetry.maxVal = smoothTelemetry.maxVal + (maxVal - smoothTelemetry.maxVal) * alpha;
-      smoothTelemetry.minX = Math.round(smoothTelemetry.minX + (minX - smoothTelemetry.minX) * alpha);
-      smoothTelemetry.minY = Math.round(smoothTelemetry.minY + (minY - smoothTelemetry.minY) * alpha);
-      smoothTelemetry.minVal = smoothTelemetry.minVal + (minVal - smoothTelemetry.minVal) * alpha;
-    }
-    return {
-      field,
-      width,
-      height,
-      maxX: smoothTelemetry.maxX,
-      maxY: smoothTelemetry.maxY,
-      maxVal: smoothTelemetry.maxVal,
-      minX: smoothTelemetry.minX,
-      minY: smoothTelemetry.minY,
-      minVal: smoothTelemetry.minVal
-    };
+  if (!smoothTelemetry.initialized) {
+    smoothTelemetry = { maxX, maxY, maxVal, minX, minY, minVal, initialized: true };
+  } else {
+    const alpha = 0.18;
+    smoothTelemetry.maxX = Math.round(smoothTelemetry.maxX + (maxX - smoothTelemetry.maxX) * alpha);
+    smoothTelemetry.maxY = Math.round(smoothTelemetry.maxY + (maxY - smoothTelemetry.maxY) * alpha);
+    smoothTelemetry.maxVal = smoothTelemetry.maxVal + (maxVal - smoothTelemetry.maxVal) * alpha;
+    smoothTelemetry.minX = Math.round(smoothTelemetry.minX + (minX - smoothTelemetry.minX) * alpha);
+    smoothTelemetry.minY = Math.round(smoothTelemetry.minY + (minY - smoothTelemetry.minY) * alpha);
+    smoothTelemetry.minVal = smoothTelemetry.minVal + (minVal - smoothTelemetry.minVal) * alpha;
   }
 
-  return { field, width, height, maxX, maxY, maxVal, minX, minY, minVal };
+  return {
+    field,
+    width,
+    height,
+    maxX: smoothTelemetry.maxX,
+    maxY: smoothTelemetry.maxY,
+    maxVal: smoothTelemetry.maxVal,
+    minX: smoothTelemetry.minX,
+    minY: smoothTelemetry.minY,
+    minVal: smoothTelemetry.minVal
+  };
 }
 
-// Deterministic pseudo-noise for sensor grain (with optional temporal seed for live video)
+// Deterministic pseudo-noise for sensor grain
 let frameSeed = 0;
 function fastGrain(idx) {
   let n = ((idx + frameSeed) * 1664525 + 1013904223) >>> 0;
@@ -634,9 +966,11 @@ function renderGenerativeMode(targetCtx, thermalData) {
   targetCtx.restore();
 }
 
-// Multi-pass Thermal Halation / Bloom
-function applyThermalBloom(targetCtx, width, height) {
-  if (state.bloom <= 0.02) return;
+// Multi-pass Thermal Halation / Bloom (boosted slightly when crowd heat is high)
+function applyThermalBloom(targetCtx, width, height, normCrowd = 0.35) {
+  const extraBloom = state.crowdHeatEnabled ? Math.max(0, (normCrowd - 0.5) * 0.35) : 0;
+  const effBloom = state.bloom + extraBloom;
+  if (effBloom <= 0.02) return;
   const scale = 0.25;
   const bw = Math.max(1, Math.round(width * scale));
   const bh = Math.max(1, Math.round(height * scale));
@@ -650,13 +984,13 @@ function applyThermalBloom(targetCtx, width, height) {
 
   targetCtx.save();
   targetCtx.globalCompositeOperation = "screen";
-  targetCtx.globalAlpha = Math.min(1, state.bloom * 0.85);
+  targetCtx.globalAlpha = Math.min(1, effBloom * 0.85);
   targetCtx.drawImage(bloomCanvas, 0, 0, width, height);
   targetCtx.restore();
 }
 
 // Thermal Telemetry HUD Overlay
-function renderThermalHUD(targetCtx, thermalData, sourceLabel) {
+function renderThermalHUD(targetCtx, thermalData) {
   const { width, height, maxX, maxY, maxVal, minX, minY, minVal } = thermalData;
   targetCtx.save();
 
@@ -684,10 +1018,12 @@ function renderThermalHUD(targetCtx, thermalData, sourceLabel) {
     targetCtx.fillRect(barX, barY + y, barW, 1.5);
   }
 
+  const scaleMaxC = (smoothAmbientTempC + 4.2).toFixed(1);
+  const scaleMinC = Math.max(14.0, smoothAmbientTempC - 10.5).toFixed(1);
   targetCtx.fillStyle = "#ffffff";
   targetCtx.textAlign = "center";
-  targetCtx.fillText("39.4°C", barX + barW * 0.5, barY - 10);
-  targetCtx.fillText("18.2°C", barX + barW * 0.5, barY + barH + 18);
+  targetCtx.fillText(`${scaleMaxC}°C`, barX + barW * 0.5, barY - 10);
+  targetCtx.fillText(`${scaleMinC}°C`, barX + barW * 0.5, barY + barH + 18);
 
   // 2. Hotspot Crosshair (MAX TEMP)
   const rCross = Math.round(16 * scaleFactor);
@@ -701,7 +1037,7 @@ function renderThermalHUD(targetCtx, thermalData, sourceLabel) {
   targetCtx.lineTo(maxX, maxY + rCross * 1.4);
   targetCtx.stroke();
 
-  const maxTemp = (24 + maxVal * 15.4).toFixed(1);
+  const maxTemp = (18.0 + maxVal * 24.5).toFixed(1);
   targetCtx.textAlign = "left";
   targetCtx.fillStyle = "rgba(5, 7, 18, 0.72)";
   targetCtx.fillRect(maxX + rCross + 6, maxY - 11, 108 * scaleFactor, 22 * scaleFactor);
@@ -709,7 +1045,7 @@ function renderThermalHUD(targetCtx, thermalData, sourceLabel) {
   targetCtx.fillText(`MAX ${maxTemp}°C`, maxX + rCross + 12, maxY + 4);
 
   // 3. Coldspot Marker (MIN TEMP)
-  const minTemp = (18 + minVal * 8.2).toFixed(1);
+  const minTemp = (15.5 + minVal * 10.2).toFixed(1);
   targetCtx.strokeStyle = "#00d8d8";
   targetCtx.beginPath();
   targetCtx.arc(minX, minY, rCross * 0.7, 0, Math.PI * 2);
@@ -721,72 +1057,18 @@ function renderThermalHUD(targetCtx, thermalData, sourceLabel) {
 
   // 4. Top-Left Corner Telemetry Frame
   const pad = Math.round(24 * scaleFactor);
-  targetCtx.fillStyle = "rgba(5, 7, 18, 0.6)";
-  targetCtx.fillRect(pad, pad, 240 * scaleFactor, 48 * scaleFactor);
+  targetCtx.fillStyle = "rgba(5, 7, 18, 0.65)";
+  targetCtx.fillRect(pad, pad, 260 * scaleFactor, 50 * scaleFactor);
   targetCtx.strokeStyle = "rgba(0, 216, 216, 0.5)";
-  targetCtx.strokeRect(pad, pad, 240 * scaleFactor, 48 * scaleFactor);
+  targetCtx.strokeRect(pad, pad, 260 * scaleFactor, 50 * scaleFactor);
 
+  const countDisplay = Math.round(smoothCrowdCount);
   targetCtx.fillStyle = "#00d8d8";
-  targetCtx.fillText(`IR // ${sourceLabel.toUpperCase()}`, pad + 10, pad + 19 * scaleFactor);
+  targetCtx.fillText(`SUBJECTS: ${countDisplay} // TEMP: ${smoothAmbientTempC.toFixed(1)}°C`, pad + 10, pad + 19 * scaleFactor);
   targetCtx.fillStyle = "rgba(255,255,255,0.75)";
   targetCtx.fillText(`MODE: ${state.mode.toUpperCase()}  ε=0.98`, pad + 10, pad + 37 * scaleFactor);
 
   targetCtx.restore();
-}
-
-// Dynamically fit mainCanvas CSS dimensions to singleViewWrapper while preserving exact aspect ratio
-function fitMainCanvasToStage() {
-  const wrapper = document.getElementById("singleViewWrapper");
-  if (!wrapper || isGridView) return;
-  const availW = wrapper.clientWidth;
-  const availH = wrapper.clientHeight;
-  if (availW <= 0 || availH <= 0 || !mainCanvas.width || !mainCanvas.height) return;
-  const canvasAspect = mainCanvas.width / mainCanvas.height;
-  const wrapperAspect = availW / availH;
-  let cssW, cssH;
-  if (canvasAspect > wrapperAspect) {
-    cssW = availW;
-    cssH = Math.max(1, Math.round(availW / canvasAspect));
-  } else {
-    cssH = availH;
-    cssW = Math.max(1, Math.round(availH * canvasAspect));
-  }
-  mainCanvas.style.width = `${cssW}px`;
-  mainCanvas.style.height = `${cssH}px`;
-}
-
-// Render a still portrait onto a given canvas
-function renderPortraitToCanvas(imgEntry, canvas) {
-  if (!imgEntry || !imgEntry.loaded) return;
-  const { width, height } = imgEntry.cache;
-  if (canvas.width !== width || canvas.height !== height) {
-    canvas.width = width;
-    canvas.height = height;
-    if (canvas === mainCanvas) {
-      fitMainCanvasToStage();
-    }
-  }
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-
-  if (isHoldingOriginal) {
-    ctx.drawImage(imgEntry.img, 0, 0, width, height);
-    return;
-  }
-
-  frameSeed = 0;
-  const thermalData = computeThermalFieldFromCache(imgEntry.cache, false);
-
-  if (state.mode === "generative") {
-    renderGenerativeMode(ctx, thermalData);
-  } else {
-    renderPixelThermalBuffer(ctx, thermalData, state.mode);
-  }
-
-  applyThermalBloom(ctx, width, height);
-
-  if (state.showHud) {
-    renderThermalHUD(ctx, thermalData, imgEntry.name);
-  }
 }
 
 // ==========================================
@@ -812,7 +1094,6 @@ async function populateCameraDevices() {
         if (/ultra\s*wide|0\.5/i.test(lbl)) {
           if (!backUltraWideId) backUltraWideId = d.deviceId;
         } else if (/triple|dual\s*wide|dual/i.test(lbl)) {
-          // Prefer virtual multi-camera on iOS as primary back camera
           backMainId = d.deviceId;
         } else if (!/telephoto|tele\b/i.test(lbl) && !backMainId) {
           backMainId = d.deviceId;
@@ -823,13 +1104,9 @@ async function populateCameraDevices() {
     });
 
     cameraLensMap = { frontId, backMainId, backUltraWideId };
-
-    // Show .5x zoom button when on Back camera if ultra-wide lens or <1x hardware zoom is available
     updateZoomUI();
 
-    // Populate merged camera selector (Front Camera, Back Camera, plus any desktop external cameras)
     const select = document.getElementById("cameraDeviceSelect");
-    const desktopWrap = document.getElementById("desktopCamSelectWrap");
     if (select) {
       select.innerHTML = "";
       const optFront = document.createElement("option");
@@ -854,10 +1131,6 @@ async function populateCameraDevices() {
       });
 
       select.value = cameraFacing;
-      // Only show dropdown on desktop when multiple external cameras exist; mobile uses Flip button
-      if (desktopWrap) {
-        desktopWrap.style.display = externalDevices.length > 1 ? "flex" : "none";
-      }
     }
   } catch (err) {
     console.warn("Could not enumerate video devices:", err);
@@ -930,8 +1203,8 @@ async function startWebcam(targetModeOrId = "") {
   const retryBtn = document.getElementById("retryWebcamBtn");
 
   overlay.classList.add("visible");
-  titleEl.textContent = "Starting Real-Time Thermal Camera...";
-  descEl.textContent = "Allow camera access in your browser prompt to stream live webcam footage through the thermal code-art engine.";
+  titleEl.textContent = "Initializing Live Thermal Feed...";
+  descEl.textContent = "Allow camera access in your browser prompt to stream real-time thermal video. More people in frame increases the thermal temperature.";
   retryBtn.style.display = "none";
 
   stopWebcamStreamOnly();
@@ -982,7 +1255,6 @@ async function startWebcam(targetModeOrId = "") {
     updateFreezeBtnUI();
     overlay.classList.remove("visible");
 
-    // Detect whether active camera is a back/rear camera and auto-set mirrorWebcam
     const track = webcamStream.getVideoTracks()[0];
     const settings = (track && track.getSettings) ? track.getSettings() : {};
     const trackLabel = (track && track.label) ? track.label : "";
@@ -992,7 +1264,6 @@ async function startWebcam(targetModeOrId = "") {
       /back|rear|environment/i.test(trackLabel);
 
     cameraFacing = isBackCamera ? "environment" : "user";
-    // Back cameras should NOT be mirrored; front selfie camera SHOULD be mirrored
     mirrorWebcam = !isBackCamera;
     const mirrorCheckbox = document.getElementById("mirrorWebcam");
     if (mirrorCheckbox) {
@@ -1001,7 +1272,7 @@ async function startWebcam(targetModeOrId = "") {
 
     const flipLabel = document.getElementById("flipCameraLabel");
     if (flipLabel) {
-      flipLabel.textContent = isBackCamera ? "Back Cam" : "Front Cam";
+      flipLabel.textContent = isBackCamera ? "Back" : "Flip";
     }
 
     await populateCameraDevices();
@@ -1037,15 +1308,15 @@ function startWebcamLoop() {
   fpsLastTime = performance.now();
 
   const step = () => {
-    if (state.sourceMode !== "webcam" || !webcamActive) return;
+    if (!webcamActive) return;
     renderWebcamFrame();
 
-    // Update FPS indicator
     fpsFrameCount++;
     const now = performance.now();
     if (now - fpsLastTime >= 500) {
       const fps = Math.round((fpsFrameCount * 1000) / (now - fpsLastTime));
-      document.getElementById("fpsCounter").textContent = `${fps} FPS`;
+      const fpsEl = document.getElementById("fpsCounter");
+      if (fpsEl) fpsEl.textContent = `${fps} FPS`;
       fpsFrameCount = 0;
       fpsLastTime = now;
     }
@@ -1066,10 +1337,10 @@ function renderWebcamFrame() {
     webcamCapCanvas.width = targetW;
     webcamCapCanvas.height = targetH;
     webcamRawBuffer = new Float32Array(targetW * targetH);
-    document.getElementById("webcamResLabel").textContent = `LIVE IR • ${targetW} × ${targetH} px`;
+    const resLabel = document.getElementById("webcamResLabel");
+    if (resLabel) resLabel.textContent = `${targetW} × ${targetH} px`;
   }
 
-  // Only draw new video frame if not frozen
   if (!webcamFrozen) {
     webcamCapCtx.save();
     if (mirrorWebcam) {
@@ -1088,7 +1359,6 @@ function renderWebcamFrame() {
   if (mainCanvas.width !== targetW || mainCanvas.height !== targetH) {
     mainCanvas.width = targetW;
     mainCanvas.height = targetH;
-    fitMainCanvasToStage();
   }
 
   if (isHoldingOriginal) {
@@ -1096,9 +1366,14 @@ function renderWebcamFrame() {
     return;
   }
 
-  const data = webcamCapCtx.getImageData(0, 0, targetW, targetH).data;
-  webcamHist.fill(0);
+  const frameImgData = webcamCapCtx.getImageData(0, 0, targetW, targetH);
+  const data = frameImgData.data;
 
+  // Detect how many people are in frame and compute crowd heat level
+  updatePeopleDetection(performance.now(), frameImgData, targetW, targetH);
+  const normCrowd = stepCrowdThermalState();
+
+  webcamHist.fill(0);
   for (let i = 0, p = 0; i < webcamRawBuffer.length; i++, p += 4) {
     const r = data[p] / 255;
     const g = data[p + 1] / 255;
@@ -1118,12 +1393,11 @@ function renderWebcamFrame() {
     maxP
   };
 
-  // Subtle animated grain seed for live sensor feel
   if (!webcamFrozen) {
     frameSeed = (frameSeed + 997) & 0xffff;
   }
 
-  const thermalData = computeThermalFieldFromCache(cacheObj, true);
+  const thermalData = computeThermalFieldFromCache(cacheObj, normCrowd);
 
   if (state.mode === "generative") {
     renderGenerativeMode(mainCtx, thermalData);
@@ -1131,36 +1405,10 @@ function renderWebcamFrame() {
     renderPixelThermalBuffer(mainCtx, thermalData, state.mode);
   }
 
-  applyThermalBloom(mainCtx, targetW, targetH);
+  applyThermalBloom(mainCtx, targetW, targetH, normCrowd);
 
   if (state.showHud) {
-    renderThermalHUD(mainCtx, thermalData, "LIVE CAM");
-  }
-}
-
-// Switch between 1. Real-Time Webcam Mode and 2. Still Image Mode
-function setSourceMode(newSourceMode) {
-  if (state.sourceMode === newSourceMode) return;
-  state.sourceMode = newSourceMode;
-
-  document.getElementById("sourceStillBtn").classList.toggle("active", newSourceMode === "still");
-  document.getElementById("sourceWebcamBtn").classList.toggle("active", newSourceMode === "webcam");
-
-  document.getElementById("stillActionsGroup").style.display = newSourceMode === "still" ? "flex" : "none";
-  document.getElementById("webcamActionsGroup").style.display = newSourceMode === "webcam" ? "flex" : "none";
-
-  document.getElementById("stillFilmstripContainer").style.display = newSourceMode === "still" ? "flex" : "none";
-  document.getElementById("webcamStatusBar").classList.toggle("active", newSourceMode === "webcam");
-
-  updateStillEmptyState();
-
-  if (newSourceMode === "webcam") {
-    if (isGridView) toggleGridView(false);
-    startWebcam(cameraFacing);
-  } else {
-    stopWebcamStreamOnly();
-    document.getElementById("webcamPromptOverlay").classList.remove("visible");
-    requestRender();
+    renderThermalHUD(mainCtx, thermalData);
   }
 }
 
@@ -1169,10 +1417,10 @@ function updateFreezeBtnUI() {
   if (!btn) return;
   if (webcamFrozen) {
     btn.classList.add("active");
-    btn.innerHTML = `<span>▶</span><span class="label-full">Resume Live</span><span class="label-short">Resume</span>`;
+    btn.innerHTML = `<span>▶</span><span class="dock-btn-text">Resume</span>`;
   } else {
     btn.classList.remove("active");
-    btn.innerHTML = `<span>⏸</span><span class="label-full">Freeze Frame</span><span class="label-short">Freeze</span>`;
+    btn.innerHTML = `<span>⏸</span><span class="dock-btn-text">Freeze</span>`;
   }
 }
 
@@ -1223,7 +1471,7 @@ function startVideoRecording() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `thermal-webcam-${state.mode}-${Date.now()}.${ext}`;
+    a.download = `thermal-live-${state.mode}-${Date.now()}.${ext}`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -1235,7 +1483,7 @@ function startVideoRecording() {
   isRecording = true;
   const recBtn = document.getElementById("recordWebcamBtn");
   recBtn.classList.add("recording");
-  recBtn.innerHTML = `<span>■</span><span class="label-full">Stop Recording</span><span class="label-short">Stop</span>`;
+  recBtn.innerHTML = `<span>■</span><span class="dock-btn-text">Stop</span>`;
   showToast("Recording live thermal video...");
 }
 
@@ -1247,125 +1495,20 @@ function stopVideoRecording() {
   const recBtn = document.getElementById("recordWebcamBtn");
   if (recBtn) {
     recBtn.classList.remove("recording");
-    recBtn.innerHTML = `<span>●</span><span class="label-full">Record Video</span><span class="label-short">Rec</span>`;
+    recBtn.innerHTML = `<span>●</span><span class="dock-btn-text">Rec</span>`;
   }
 }
 
-function updateStillEmptyState() {
-  const empty = state.sourceMode === "still" && imagesList.length === 0;
-  document.getElementById("stillEmptyOverlay").classList.toggle("visible", empty);
-}
-
-let renderQueued = false;
 function requestRender() {
   buildLUT();
-  updateStillEmptyState();
-  if (state.sourceMode === "webcam") {
-    // Live loop handles rendering automatically; if frozen, trigger one frame redraw
-    if (webcamFrozen && webcamActive) {
-      renderWebcamFrame();
-    }
-    return;
+  if (webcamFrozen && webcamActive) {
+    renderWebcamFrame();
   }
-  if (renderQueued) return;
-  renderQueued = true;
-  requestAnimationFrame(() => {
-    renderQueued = false;
-    if (isGridView) {
-      renderAllGridCanvases();
-    } else if (imagesList[activeIndex]) {
-      renderPortraitToCanvas(imagesList[activeIndex], mainCanvas);
-      fitMainCanvasToStage();
-      const { width, height } = imagesList[activeIndex].cache || { width: 928, height: 1152 };
-      document.getElementById("resolutionLabel").textContent = `${width} × ${height} px`;
-    }
-  });
-}
-
-function renderAllGridCanvases() {
-  const wrapper = document.getElementById("gridViewWrapper");
-  if (wrapper.children.length !== imagesList.length) {
-    wrapper.innerHTML = "";
-    imagesList.forEach((entry, idx) => {
-      const card = document.createElement("div");
-      card.className = "grid-item";
-      const c = document.createElement("canvas");
-      const label = document.createElement("div");
-      label.className = "grid-item-label";
-      label.innerHTML = `<span>${entry.name}</span><span style="color:var(--accent-cyan)">Tap to Focus</span>`;
-      card.appendChild(c);
-      card.appendChild(label);
-      card.addEventListener("click", () => {
-        activeIndex = idx;
-        toggleGridView(false);
-        updateThumbnailsActive();
-      });
-      wrapper.appendChild(card);
-    });
-  }
-  Array.from(wrapper.children).forEach((card, idx) => {
-    const c = card.querySelector("canvas");
-    renderPortraitToCanvas(imagesList[idx], c);
-  });
-}
-
-function toggleGridView(forceState) {
-  isGridView = typeof forceState === "boolean" ? forceState : !isGridView;
-  const singleW = document.getElementById("singleViewWrapper");
-  const gridW = document.getElementById("gridViewWrapper");
-  const stageEl = document.querySelector(".canvas-stage");
-  const btn = document.getElementById("toggleGridBtn");
-  if (isGridView) {
-    singleW.style.display = "none";
-    gridW.classList.add("active");
-    if (stageEl) stageEl.classList.add("grid-mode-active");
-    btn.classList.add("active");
-  } else {
-    singleW.style.display = "flex";
-    gridW.classList.remove("active");
-    if (stageEl) stageEl.classList.remove("grid-mode-active");
-    btn.classList.remove("active");
-    fitMainCanvasToStage();
-  }
-  requestRender();
-}
-
-function updateThumbnailsActive() {
-  const listEl = document.getElementById("thumbnailsList");
-  Array.from(listEl.children).forEach((el, idx) => {
-    const isActive = idx === activeIndex;
-    el.classList.toggle("active", isActive);
-    if (isActive && el.scrollIntoView) {
-      el.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
-    }
-  });
-}
-
-function buildFilmstrip() {
-  const listEl = document.getElementById("thumbnailsList");
-  listEl.innerHTML = "";
-  imagesList.forEach((entry, idx) => {
-    const item = document.createElement("div");
-    item.className = `thumb-item ${idx === activeIndex ? "active" : ""}`;
-    item.innerHTML = `
-      <img src="${entry.src}" alt="${entry.name}" />
-      <div class="thumb-meta">
-        <div class="thumb-title">${entry.name}</div>
-        <div class="thumb-sub">Portrait #${idx + 1}</div>
-      </div>
-    `;
-    item.addEventListener("click", () => {
-      activeIndex = idx;
-      updateThumbnailsActive();
-      if (isGridView) toggleGridView(false);
-      else requestRender();
-    });
-    listEl.appendChild(item);
-  });
 }
 
 function showToast(msg) {
   const toast = document.getElementById("statusToast");
+  if (!toast) return;
   toast.textContent = msg;
   toast.classList.add("visible");
   clearTimeout(showToast._timer);
@@ -1387,30 +1530,26 @@ function toggleControlsPanel(forceCollapsed) {
     : !document.body.classList.contains("controls-collapsed");
   document.body.classList.toggle("controls-collapsed", isCollapsed);
   const toggleBtn = document.getElementById("toggleControlsBtn");
+  const chevron = document.getElementById("pullupChevron");
   if (toggleBtn) {
     toggleBtn.classList.toggle("active", !isCollapsed);
     toggleBtn.setAttribute("aria-expanded", String(!isCollapsed));
-    toggleBtn.innerHTML = isCollapsed
-      ? `<span>▴</span><span class="label-full">Show Controls</span><span class="label-short">Show Tune</span>`
-      : `<span>⚙</span><span class="label-full">Controls</span><span class="label-short">Tune</span>`;
+  }
+  if (chevron) {
+    chevron.textContent = isCollapsed ? "▴" : "▾";
   }
   requestAnimationFrame(() => {
-    fitMainCanvasToStage();
     drawPalettePreview();
   });
 }
 
 // Bind UI Controls
 function initControls() {
-  // Top-level Source Mode Switcher (Still Image vs Real-Time Webcam)
-  document.getElementById("sourceStillBtn").addEventListener("click", () => setSourceMode("still"));
-  document.getElementById("sourceWebcamBtn").addEventListener("click", () => setSourceMode("webcam"));
-
   document.getElementById("retryWebcamBtn").addEventListener("click", () => {
     startWebcam(cameraFacing);
   });
 
-  // Controls Panel Toggle (Header, Mobile Hide Handle, and Persistent Bottom Show Bar)
+  // Pull-Up Controls Panel Toggle (Bottom Dock Button + Drawer Hide Button)
   const toggleControlsBtn = document.getElementById("toggleControlsBtn");
   if (toggleControlsBtn) {
     toggleControlsBtn.addEventListener("click", () => toggleControlsPanel());
@@ -1419,12 +1558,31 @@ function initControls() {
   if (collapseMobileBtn) {
     collapseMobileBtn.addEventListener("click", () => toggleControlsPanel(true));
   }
-  const showControlsBottomBar = document.getElementById("showControlsBottomBar");
-  if (showControlsBottomBar) {
-    showControlsBottomBar.addEventListener("click", () => toggleControlsPanel(false));
+
+  // Clicking the live Crowd Temp Pill pulls up the drawer focused on Crowd Heat
+  const crowdTempPill = document.getElementById("crowdTempPill");
+  if (crowdTempPill) {
+    crowdTempPill.addEventListener("click", () => {
+      const wasCollapsed = document.body.classList.contains("controls-collapsed");
+      if (wasCollapsed) {
+        toggleControlsPanel(false);
+      }
+      const crowdTab = document.querySelector('#mobileSectionTabs .sec-tab[data-sec="crowd"]');
+      if (crowdTab) crowdTab.click();
+    });
   }
 
-  // Mobile Control Category Filter Tabs (All | Palette | Field | Style | Optics)
+  // Click on the CRT video canvas when drawer is open collapses the drawer cleanly
+  const singleViewWrapper = document.getElementById("singleViewWrapper");
+  if (singleViewWrapper) {
+    singleViewWrapper.addEventListener("click", (e) => {
+      if (e.target === mainCanvas && !document.body.classList.contains("controls-collapsed")) {
+        toggleControlsPanel(true);
+      }
+    });
+  }
+
+  // Drawer Category Filter Tabs (All | Crowd Heat | Palette | Field | Style | Optics | Camera)
   const mobileSectionTabs = document.getElementById("mobileSectionTabs");
   if (mobileSectionTabs) {
     mobileSectionTabs.querySelectorAll(".sec-tab").forEach((tab) => {
@@ -1436,22 +1594,23 @@ function initControls() {
           const match = targetSec === "all" || sec.dataset.section === targetSec;
           sec.classList.toggle("mobile-filtered-out", !match);
         });
-        const sidebar = document.getElementById("controlsSidebar");
-        if (sidebar) sidebar.scrollTop = 0;
       });
     });
   }
 
-  // Observe stage resize to keep canvas fitted in any aspect ratio or orientation
-  const singleViewWrapper = document.getElementById("singleViewWrapper");
-  if (window.ResizeObserver && singleViewWrapper) {
-    const ro = new ResizeObserver(() => {
-      fitMainCanvasToStage();
+  // Crowd Override Pills (Auto | 0 | 1 | 2 | 3 | 4+)
+  document.querySelectorAll("#crowdOverridePills .pill-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#crowdOverridePills .pill-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      const val = btn.dataset.crowd;
+      state.crowdOverride = val === "auto" ? "auto" : parseInt(val, 10);
+      const simLabel = document.getElementById("crowdSimLabel");
+      if (simLabel) {
+        simLabel.textContent = val === "auto" ? "Auto AI" : `Simulated (${val === "4" ? "4+" : val})`;
+      }
+      requestRender();
     });
-    ro.observe(singleViewWrapper);
-  }
-  window.addEventListener("resize", () => {
-    fitMainCanvasToStage();
   });
 
   // Webcam Flip Camera button (Front <-> Back)
@@ -1474,11 +1633,9 @@ function initControls() {
     });
   });
 
-  // Webcam bottom bar controls
+  // Camera stream settings inside drawer
   document.getElementById("cameraDeviceSelect").addEventListener("change", (e) => {
-    if (state.sourceMode === "webcam") {
-      startWebcam(e.target.value);
-    }
+    startWebcam(e.target.value);
   });
 
   document.getElementById("webcamResSelect").addEventListener("change", (e) => {
@@ -1493,17 +1650,17 @@ function initControls() {
     }
   });
 
-  // Webcam Header Actions
+  // Bottom Dock Capture Actions
   document.getElementById("freezeWebcamBtn").addEventListener("click", () => {
     webcamFrozen = !webcamFrozen;
     updateFreezeBtnUI();
-    showToast(webcamFrozen ? "Webcam frame frozen — tweak sliders freely" : "Resumed live webcam stream");
+    showToast(webcamFrozen ? "Frame frozen — pull up Controls to tune" : "Resumed live thermal stream");
   });
 
   document.getElementById("snapshotWebcamBtn").addEventListener("click", () => {
     if (!webcamActive) return;
-    downloadCanvasPNG(mainCanvas, `webcam-${state.mode}-heatmap-${Date.now()}.png`);
-    showToast("Saved webcam thermal snapshot PNG!");
+    downloadCanvasPNG(mainCanvas, `thermal-crt-${state.mode}-${Date.now()}.png`);
+    showToast("Saved thermal snapshot PNG!");
   });
 
   document.getElementById("recordWebcamBtn").addEventListener("click", () => {
@@ -1511,14 +1668,11 @@ function initControls() {
     toggleVideoRecording();
   });
 
-  // Mode Cards (Options 1 - 4)
+  // Mode Cards (Options 1 - 4) in Bottom Dock
   document.querySelectorAll(".mode-card").forEach((card) => {
     card.addEventListener("click", () => {
       document.querySelectorAll(".mode-card").forEach((c) => c.classList.remove("active"));
       card.classList.add("active");
-      if (card.scrollIntoView) {
-        card.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
-      }
       state.mode = card.dataset.mode;
 
       if (state.mode === "layered") {
@@ -1559,6 +1713,8 @@ function initControls() {
 
   // Sliders
   const sliders = [
+    { id: "crowdMaxPeople", valId: "crowdMaxPeopleVal", fmt: (v) => `${v} People` },
+    { id: "crowdIntensity", valId: "crowdIntensityVal", fmt: (v) => Number(v).toFixed(2) },
     { id: "hueShift", valId: "hueShiftVal", fmt: (v) => `${v}°` },
     { id: "posterize", valId: "posterizeVal", fmt: (v) => (v < 2 ? "Smooth" : `${v} bands`) },
     { id: "smoothing", valId: "smoothingVal", fmt: (v) => `${Number(v).toFixed(1)} px` },
@@ -1581,6 +1737,7 @@ function initControls() {
   sliders.forEach(({ id, valId, fmt }) => {
     const el = document.getElementById(id);
     const valEl = document.getElementById(valId);
+    if (!el || !valEl) return;
     el.addEventListener("input", () => {
       const num = parseFloat(el.value);
       state[id] = num;
@@ -1595,8 +1752,10 @@ function initControls() {
     requestRender();
   });
 
-  ["invertThermal", "autoNormalize", "showHud"].forEach((id) => {
-    document.getElementById(id).addEventListener("change", (e) => {
+  ["crowdHeatEnabled", "invertThermal", "autoNormalize", "showHud"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener("change", (e) => {
       state[id] = e.target.checked;
       requestRender();
     });
@@ -1605,23 +1764,27 @@ function initControls() {
   // Reset button
   document.getElementById("resetParamsBtn").addEventListener("click", () => {
     const keepMode = state.mode;
-    const keepSource = state.sourceMode;
-    state = { ...DEFAULT_STATE, mode: keepMode, sourceMode: keepSource };
+    state = { ...DEFAULT_STATE, mode: keepMode };
     document.getElementById("paletteSelect").value = state.palette;
     sliders.forEach(({ id, valId, fmt }) => {
       const el = document.getElementById(id);
-      el.value = state[id];
-      document.getElementById(valId).textContent = fmt(state[id]);
+      if (el) {
+        el.value = state[id];
+        document.getElementById(valId).textContent = fmt(state[id]);
+      }
     });
-    ["invertThermal", "autoNormalize", "showHud"].forEach((id) => {
-      document.getElementById(id).checked = state[id];
+    ["crowdHeatEnabled", "invertThermal", "autoNormalize", "showHud"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.checked = state[id];
     });
+    document.querySelectorAll("#crowdOverridePills .pill-btn").forEach((b) => {
+      b.classList.toggle("active", b.dataset.crowd === "auto");
+    });
+    const simLabel = document.getElementById("crowdSimLabel");
+    if (simLabel) simLabel.textContent = "Auto AI";
     requestRender();
     showToast("Parameters reset to default");
   });
-
-  // Grid View toggle
-  document.getElementById("toggleGridBtn").addEventListener("click", () => toggleGridView());
 
   // Hold for Original (Mouse + Touch / Pointer support)
   const holdBtn = document.getElementById("holdOriginalBtn");
@@ -1643,154 +1806,28 @@ function initControls() {
   window.addEventListener("touchend", endHold);
   window.addEventListener("touchcancel", endHold);
 
-  // Horizontal touch swipe on canvas stage to switch portraits in Still Mode
-  let touchStartX = 0;
-  let touchStartY = 0;
-  if (singleViewWrapper) {
-    singleViewWrapper.addEventListener("touchstart", (e) => {
-      if (e.touches.length === 1) {
-        touchStartX = e.touches[0].clientX;
-        touchStartY = e.touches[0].clientY;
-      }
-    }, { passive: true });
-
-    singleViewWrapper.addEventListener("touchend", (e) => {
-      if (state.sourceMode !== "still" || isGridView || imagesList.length <= 1) return;
-      if (e.changedTouches.length === 1) {
-        const dx = e.changedTouches[0].clientX - touchStartX;
-        const dy = e.changedTouches[0].clientY - touchStartY;
-        if (Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.4) {
-          if (dx < 0) {
-            activeIndex = (activeIndex + 1) % imagesList.length;
-          } else {
-            activeIndex = (activeIndex - 1 + imagesList.length) % imagesList.length;
-          }
-          updateThumbnailsActive();
-          requestRender();
-        }
-      }
-    }, { passive: true });
-  }
-
-  // Export Current Still
-  document.getElementById("exportCurrentBtn").addEventListener("click", () => {
-    const entry = imagesList[activeIndex];
-    if (!entry) return;
-    const exportCanvas = document.createElement("canvas");
-    renderPortraitToCanvas(entry, exportCanvas);
-    const safeName = entry.name.replace(/\s+/g, "-");
-    downloadCanvasPNG(exportCanvas, `${safeName}-${state.mode}-heatmap.png`);
-    showToast(`Exported ${safeName}-${state.mode}-heatmap.png`);
-  });
-
-  // Batch Export All 5
-  document.getElementById("exportAllBtn").addEventListener("click", () => {
-    const exportCanvas = document.createElement("canvas");
-    imagesList.forEach((entry, idx) => {
-      setTimeout(() => {
-        renderPortraitToCanvas(entry, exportCanvas);
-        const safeName = entry.name.replace(/\s+/g, "-");
-        downloadCanvasPNG(exportCanvas, `${safeName}-${state.mode}-heatmap.png`);
-        if (idx === imagesList.length - 1) {
-          showToast(`Batch exported all ${imagesList.length} portraits!`);
-        }
-      }, idx * 220);
-    });
-  });
-
-  // Upload additional images
-  function handleImageFiles(files) {
-    files.forEach((file) => {
-      if (!file.type.startsWith("image/")) return;
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        const name = file.name.replace(/\.[^.]+$/, "");
-        if (state.sourceMode !== "still") {
-          setSourceMode("still");
-        }
-        addImageEntry({ name, filename: file.name, src: ev.target.result }, true);
-      };
-      reader.readAsDataURL(file);
-    });
-  }
-
-  document.getElementById("uploadInput").addEventListener("change", (e) => {
-    handleImageFiles(Array.from(e.target.files || []));
-  });
-
-  // Drag-and-drop support onto the canvas stage
-  const stageEl = document.querySelector(".canvas-stage");
-  if (stageEl) {
-    stageEl.addEventListener("dragover", (e) => {
-      e.preventDefault();
-    });
-    stageEl.addEventListener("drop", (e) => {
-      e.preventDefault();
-      if (e.dataTransfer && e.dataTransfer.files) {
-        handleImageFiles(Array.from(e.dataTransfer.files));
-      }
-    });
-  }
-
   // Keyboard shortcuts
   window.addEventListener("keydown", (e) => {
     if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
-    if (e.key === "ArrowRight" && state.sourceMode === "still" && imagesList.length > 0) {
-      activeIndex = (activeIndex + 1) % imagesList.length;
-      updateThumbnailsActive();
-      requestRender();
-    } else if (e.key === "ArrowLeft" && state.sourceMode === "still" && imagesList.length > 0) {
-      activeIndex = (activeIndex - 1 + imagesList.length) % imagesList.length;
-      updateThumbnailsActive();
-      requestRender();
-    } else if (["1", "2", "3", "4"].includes(e.key)) {
+    if (["1", "2", "3", "4"].includes(e.key)) {
       const modes = ["thermal", "topo", "generative", "layered"];
       const card = document.querySelector(`.mode-card[data-mode="${modes[parseInt(e.key, 10) - 1]}"]`);
       if (card) card.click();
-    } else if (e.code === "Space" && state.sourceMode === "webcam") {
+    } else if (e.code === "Space") {
       e.preventDefault();
       document.getElementById("freezeWebcamBtn").click();
+    } else if (e.key === "Escape" && !document.body.classList.contains("controls-collapsed")) {
+      toggleControlsPanel(true);
     }
   });
-}
-
-function addImageEntry(item, switchToNew = false) {
-  const entry = {
-    name: item.name,
-    filename: item.filename,
-    src: item.src,
-    loaded: false,
-    img: new Image(),
-    cache: null
-  };
-  imagesList.push(entry);
-  updateStillEmptyState();
-  const idx = imagesList.length - 1;
-  entry.img.onload = () => {
-    entry.cache = extractRawLuminance(entry.img);
-    entry.loaded = true;
-    buildFilmstrip();
-    if (switchToNew) {
-      activeIndex = idx;
-      updateThumbnailsActive();
-    }
-    requestRender();
-  };
-  entry.img.src = item.src;
 }
 
 // Initialize app
 function init() {
   initControls();
   buildLUT();
-  fitMainCanvasToStage();
-  if (window.PORTRAIT_IMAGES && window.PORTRAIT_IMAGES.length > 0) {
-    window.PORTRAIT_IMAGES.forEach((item) => addImageEntry(item, false));
-  }
-  updateStillEmptyState();
-  if (state.sourceMode === "webcam") {
-    startWebcam(cameraFacing);
-  }
+  initPeopleDetectors();
+  startWebcam(cameraFacing);
 }
 
 init();
